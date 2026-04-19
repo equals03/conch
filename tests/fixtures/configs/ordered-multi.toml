@@ -1,0 +1,16 @@
+[blocks.base]
+
+[blocks.base.path]
+prepend = ["~/.local/bin"]
+
+[blocks.editor]
+after = ["base"]
+
+[blocks.editor.env]
+EDITOR = "nvim"
+
+[blocks.nvim]
+after = ["editor"]
+
+[blocks.nvim.alias]
+vim = "nvim"

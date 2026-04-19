@@ -1,0 +1,5 @@
+[blocks.a.alias]
+vim = "nvim"
+
+[blocks.b.alias]
+vim = "hx"

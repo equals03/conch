@@ -1,0 +1,15 @@
+{
+  "blocks": {
+    "simple": {
+      "env": {
+        "EDITOR": "nvim"
+      },
+      "alias": {
+        "vim": "nvim"
+      },
+      "path": {
+        "prepend": ["~/.local/bin"]
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[blocks.core]
+when = ["shell:fish"]
+requires = ["env:EDITOR", "env:VISUAL=nvim"]
+
+[blocks.core.alias]
+vim = "nvim"
+
+[blocks.core.shell.fish.alias]
+v = "nvim"
+
+[blocks.core.shell.bash.alias]
+vi = "nvim"

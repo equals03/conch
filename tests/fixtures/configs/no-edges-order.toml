@@ -1,0 +1,8 @@
+[blocks.alpha.alias]
+a = "alpha"
+
+[blocks.beta.alias]
+b = "beta"
+
+[blocks.gamma.alias]
+g = "gamma"

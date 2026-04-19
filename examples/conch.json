@@ -1,0 +1,165 @@
+{
+  "blocks": {
+    "core": {
+      "path": {
+        "prepend": ["~/.local/bin"],
+        "append": ["/usr/local/sbin"],
+        "move_front": ["~/bin"]
+      }
+    },
+    "demoflags": {
+      "env": {
+        "ENABLE_CONCH_DEMO": true,
+        "CONCH_DEMO_RETRIES": 3
+      }
+    },
+    "editor": {
+      "after": ["core"],
+      "env": {
+        "EDITOR": "nvim",
+        "VISUAL": "nvim"
+      }
+    },
+    "shell-ident": {
+      "after": ["core"],
+      "shell": {
+        "fish": {
+          "env": {
+            "SHELL": { "raw": "(command -v fish)" }
+          }
+        },
+        "bash": {
+          "env": {
+            "SHELL": { "raw": "$(command -v bash)" }
+          }
+        }
+      }
+    },
+    "convenience": {
+      "when": ["interactive"],
+      "after": ["core"],
+      "alias": {
+        "cd..": "cd ..",
+        "la": "ls -la"
+      }
+    },
+    "login-path": {
+      "when": ["login"],
+      "after": ["core"],
+      "path": {
+        "append": ["/usr/local/bin"]
+      }
+    },
+    "nvim": {
+      "when": ["interactive"],
+      "requires": ["command:nvim"],
+      "after": ["editor"],
+      "alias": {
+        "vim": "nvim"
+      },
+      "shell": {
+        "fish": {
+          "alias": {
+            "v": "nvim"
+          }
+        }
+      }
+    },
+    "linux-tip": {
+      "when": ["interactive", "os:linux"],
+      "after": ["convenience"],
+      "env": {
+        "CONCH_ON_LINUX": true
+      }
+    },
+    "bat": {
+      "when": ["interactive"],
+      "requires": ["command:bat"],
+      "after": ["core"],
+      "alias": {
+        "cat": "bat --style=plain --paging=never"
+      }
+    },
+    "eza": {
+      "when": ["interactive"],
+      "requires": ["command:eza"],
+      "after": ["core"],
+      "alias": {
+        "ls": "eza --group-directories-first"
+      }
+    },
+    "starship": {
+      "when": ["interactive"],
+      "requires": ["command:starship"],
+      "after": ["core"],
+      "shell": {
+        "fish": {
+          "source_lines": ["starship init fish | source"]
+        },
+        "bash": {
+          "source_lines": ["eval \"$(starship init bash)\""]
+        }
+      }
+    },
+    "zoxide": {
+      "when": ["interactive"],
+      "requires": ["command:zoxide"],
+      "after": ["core"],
+      "shell": {
+        "fish": {
+          "source_lines": ["zoxide init fish | source"]
+        },
+        "bash": {
+          "source_lines": ["eval \"$(zoxide init bash)\""]
+        }
+      }
+    },
+    "direnv": {
+      "when": ["interactive"],
+      "requires": ["command:direnv"],
+      "after": ["core"],
+      "shell": {
+        "fish": {
+          "source_lines": ["direnv hook fish | source"]
+        },
+        "bash": {
+          "source_lines": ["eval \"$(direnv hook bash)\""]
+        }
+      }
+    },
+    "fzf": {
+      "when": ["interactive"],
+      "requires": ["command:fzf", "!command:tv"],
+      "after": ["core"],
+      "shell": {
+        "fish": {
+          "source_lines": ["fzf --fish | source"]
+        },
+        "bash": {
+          "source_lines": ["eval \"$(fzf --bash)\""]
+        }
+      }
+    },
+    "tv": {
+      "when": ["interactive"],
+      "requires": ["command:tv"],
+      "after": ["fzf"],
+      "shell": {
+        "fish": {
+          "source_lines": ["tv init fish | source"]
+        },
+        "bash": {
+          "source_lines": ["eval \"$(tv init bash)\""]
+        }
+      }
+    },
+    "stow-hint": {
+      "when": ["interactive"],
+      "requires": ["command:stow", "dir:~/.local/share"],
+      "after": ["core"],
+      "alias": {
+        "dotfiles": "stow --dir=\"$HOME/.local/share/dotfiles\" --target=\"$HOME\""
+      }
+    }
+  }
+}

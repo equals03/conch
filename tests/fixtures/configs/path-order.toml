@@ -1,0 +1,12 @@
+[blocks.base]
+
+[blocks.base.path]
+prepend = ["~/base/bin"]
+move_front = ["~/shared/bin"]
+
+[blocks.lang]
+after = ["base"]
+
+[blocks.lang.path]
+append = ["~/lang/bin"]
+move_back = ["~/shared/bin"]

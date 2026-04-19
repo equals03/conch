@@ -1,0 +1,373 @@
+//! Configuration models.
+//!
+//! `RawConfig` is the serde/config-format boundary.
+//! `Config` is the typed domain model used by graph construction and resolution.
+
+mod raw;
+
+use std::fmt;
+
+use indexmap::IndexMap;
+use serde::de::{self, Deserializer, MapAccess, Unexpected, Visitor};
+use serde::Deserialize;
+
+use crate::error::ConchError;
+
+/// Shared [`Visitor::expecting`] / [`de::Error::invalid_type`] text for [`EnvValue`].
+const ENV_VALUE_EXPECTING: &str =
+    "a string, integer, boolean env value, or a table `{ raw = \"...\" }`";
+
+/// Maximum absolute value accepted when coercing a deserialised floating-point scalar to an integer
+/// env value.
+///
+/// Uses `2^53 - 1` (ECMA-262 `Number.MAX_SAFE_INTEGER`). `visit_f32` / `visit_f64` are not JSON-specific:
+/// any deserializer that yields IEEE-754 floats is subject to these limits. Adjacent integers need
+/// not map to distinct values once the magnitude reaches `2^53` (for example `9007199254740992.0` and
+/// `9007199254740993.0` compare equal).
+const ENV_VALUE_F64_MAX_ABS_INT: f64 = 9_007_199_254_740_991.0;
+
+fn env_value_reject_float<E: de::Error>(value: f64) -> Result<EnvValue, E> {
+    Err(de::Error::invalid_type(
+        Unexpected::Float(value),
+        &ENV_VALUE_EXPECTING,
+    ))
+}
+
+pub use raw::{BlockConfigToml, PathSpecToml, RawConfig, ShellOverridesToml};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvValue {
+    String(String),
+    Bool(bool),
+    Integer(String),
+    /// Right-hand side emitted verbatim for the target shell (no quoting or escaping).
+    Raw(String),
+}
+
+impl EnvValue {
+    pub fn as_string(&self) -> String {
+        match self {
+            Self::String(value) => value.clone(),
+            Self::Bool(value) => value.to_string(),
+            Self::Integer(value) => value.clone(),
+            Self::Raw(value) => value.clone(),
+        }
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Self::String(value) => format!("{value:?}"),
+            Self::Bool(value) => value.to_string(),
+            Self::Integer(value) => value.clone(),
+            Self::Raw(value) => format!("raw({value:?})"),
+        }
+    }
+}
+
+impl From<String> for EnvValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for EnvValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_string())
+    }
+}
+
+impl From<bool> for EnvValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<i64> for EnvValue {
+    fn from(value: i64) -> Self {
+        Self::Integer(value.to_string())
+    }
+}
+
+impl From<u64> for EnvValue {
+    fn from(value: u64) -> Self {
+        Self::Integer(value.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct EnvValueVisitor;
+
+        impl<'de> Visitor<'de> for EnvValueVisitor {
+            type Value = EnvValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(ENV_VALUE_EXPECTING)
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(EnvValue::Bool(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(EnvValue::Integer(value.to_string()))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(EnvValue::Integer(value.to_string()))
+            }
+
+            fn visit_f32<E>(self, value: f32) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                self.visit_f64(f64::from(value))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if !value.is_finite() {
+                    return env_value_reject_float(value);
+                }
+                if value.abs() > ENV_VALUE_F64_MAX_ABS_INT {
+                    return env_value_reject_float(value);
+                }
+                let as_i64 = value as i64;
+                if (as_i64 as f64) != value {
+                    return env_value_reject_float(value);
+                }
+                Ok(EnvValue::Integer(as_i64.to_string()))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(EnvValue::String(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(EnvValue::String(value))
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let mut raw: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "raw" => {
+                            if raw.is_some() {
+                                return Err(de::Error::duplicate_field("raw"));
+                            }
+                            raw = Some(map.next_value()?);
+                        }
+                        other => {
+                            return Err(de::Error::unknown_field(other, &["raw"]));
+                        }
+                    }
+                }
+                let Some(value) = raw else {
+                    return Err(de::Error::missing_field("raw"));
+                };
+                Ok(EnvValue::Raw(value))
+            }
+        }
+
+        deserializer.deserialize_any(EnvValueVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Config {
+    pub blocks: IndexMap<String, BlockConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockConfig {
+    pub when: Vec<String>,
+    pub requires: Vec<String>,
+    pub before: Vec<String>,
+    pub after: Vec<String>,
+    pub env: IndexMap<String, EnvValue>,
+    pub alias: IndexMap<String, String>,
+    pub path: PathSpec,
+    pub shell: IndexMap<String, ShellOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShellOverride {
+    pub env: IndexMap<String, EnvValue>,
+    pub alias: IndexMap<String, String>,
+    pub path: PathSpec,
+    pub source_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PathSpec {
+    pub prepend: Vec<String>,
+    pub append: Vec<String>,
+    pub move_front: Vec<String>,
+    pub move_back: Vec<String>,
+}
+
+impl TryFrom<&RawConfig> for Config {
+    type Error = ConchError;
+
+    fn try_from(raw: &RawConfig) -> Result<Self, Self::Error> {
+        if raw.blocks.is_empty() {
+            return Err(ConchError::Validation(
+                "config must define at least one block entry under `blocks.<id>`".into(),
+            ));
+        }
+
+        let mut blocks = IndexMap::new();
+        for (block_id, block) in &raw.blocks {
+            validate_block_id(block_id)?;
+            blocks.insert(block_id.clone(), block.clone().into());
+        }
+
+        Ok(Self { blocks })
+    }
+}
+
+fn validate_block_id(block_id: &str) -> Result<(), ConchError> {
+    if block_id.trim().is_empty() {
+        return Err(ConchError::Validation("block ids must be non-empty".into()));
+    }
+
+    if block_id != block_id.trim() {
+        return Err(ConchError::Validation(format!(
+            "block id `{block_id}` must not have leading or trailing whitespace"
+        )));
+    }
+
+    Ok(())
+}
+
+impl From<BlockConfigToml> for BlockConfig {
+    fn from(value: BlockConfigToml) -> Self {
+        Self {
+            when: value.when,
+            requires: value.requires,
+            before: value.before,
+            after: value.after,
+            env: value.env,
+            alias: value.alias,
+            path: value.path.into(),
+            shell: value
+                .shell
+                .into_iter()
+                .map(|(shell, override_cfg)| (shell, override_cfg.into()))
+                .collect(),
+        }
+    }
+}
+
+impl From<ShellOverridesToml> for ShellOverride {
+    fn from(value: ShellOverridesToml) -> Self {
+        Self {
+            env: value.env,
+            alias: value.alias,
+            path: value.path.into(),
+            source_lines: value.source_lines,
+        }
+    }
+}
+
+impl From<PathSpecToml> for PathSpec {
+    fn from(value: PathSpecToml) -> Self {
+        Self {
+            prepend: value.prepend,
+            append: value.append,
+            move_front: value.move_front,
+            move_back: value.move_back,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_raw_to_typed_config() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.nvim]
+            when = ["interactive"]
+            requires = ["command:nvim"]
+            before = ["editor"]
+
+            [blocks.nvim.env]
+            EDITOR = "nvim"
+            ENABLE_TRACE = true
+            RETRIES = 3
+
+            [blocks.nvim.alias]
+            vim = "nvim"
+
+            [blocks.nvim.path]
+            prepend = ["~/.local/bin"]
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::try_from(&raw).unwrap();
+        let nvim = &config.blocks["nvim"];
+        assert_eq!(nvim.when, vec!["interactive"]);
+        assert_eq!(nvim.requires, vec!["command:nvim"]);
+        assert_eq!(nvim.before, vec!["editor"]);
+        assert_eq!(nvim.env["EDITOR"], EnvValue::from("nvim"));
+        assert_eq!(nvim.env["ENABLE_TRACE"], EnvValue::from(true));
+        assert_eq!(nvim.env["RETRIES"], EnvValue::from(3_i64));
+        assert_eq!(nvim.alias["vim"], "nvim");
+        assert_eq!(nvim.path.prepend, vec!["~/.local/bin"]);
+    }
+
+    #[test]
+    fn parses_raw_env_table_in_toml() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo.env]
+            LEAN_CTX_BIN = { raw = "$(command -v lean-ctx)" }
+            "#,
+        )
+        .unwrap();
+
+        let demo = &raw.blocks["demo"];
+        assert_eq!(
+            demo.env["LEAN_CTX_BIN"],
+            EnvValue::Raw("$(command -v lean-ctx)".into())
+        );
+    }
+
+    #[test]
+    fn env_value_f64_max_abs_int_matches_ecma_max_safe_integer() {
+        assert_eq!(ENV_VALUE_F64_MAX_ABS_INT as i64, 9_007_199_254_740_991);
+        assert_eq!(
+            (ENV_VALUE_F64_MAX_ABS_INT as i64) as f64,
+            ENV_VALUE_F64_MAX_ABS_INT
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_block_ids() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks." bad "]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err.to_string().contains("leading or trailing whitespace"));
+    }
+}

@@ -1,0 +1,30 @@
+[blocks.base]
+when = ["interactive"]
+
+[blocks.base.path]
+prepend = ["~/.local/bin"]
+
+[blocks.editor]
+after = ["base"]
+
+[blocks.editor.env]
+EDITOR = "nvim"
+
+[blocks.nvim]
+when = ["interactive"]
+requires = ["command:nvim"]
+after = ["editor"]
+
+[blocks.nvim.alias]
+vim = "nvim"
+
+[blocks.nvim.shell.fish.alias]
+v = "nvim"
+
+[blocks.bat]
+when = ["interactive"]
+requires = ["command:bat"]
+after = ["base"]
+
+[blocks.bat.alias]
+cat = "bat"
