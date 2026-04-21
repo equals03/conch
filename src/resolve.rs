@@ -394,6 +394,7 @@ mod tests {
         let mut b = sample_block();
         b.alias.insert("vim".into(), "hx".into());
         RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), a), ("b".into(), b)]),
         }
     }
@@ -410,6 +411,7 @@ mod tests {
         nvim.after.push("base".into());
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), base), ("nvim".into(), nvim)]),
         };
 
@@ -451,6 +453,7 @@ mod tests {
         );
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("nvim".into(), cfg)]),
         };
 
@@ -468,6 +471,7 @@ mod tests {
         plain.alias.insert("vim".into(), "nvim".into());
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("guarded".into(), guarded), ("plain".into(), plain)]),
         };
 
@@ -483,6 +487,7 @@ mod tests {
         broken.when.push("shell".into());
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("broken".into(), broken)]),
         };
 
@@ -508,6 +513,7 @@ mod tests {
         );
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), base), ("fish_only".into(), fish_only)]),
         };
 
@@ -531,6 +537,7 @@ mod tests {
         );
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("bat".into(), cfg)]),
         };
 
@@ -545,6 +552,7 @@ mod tests {
         base.path.move_front.push("~/go/bin".into());
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), base)]),
         };
 
@@ -575,6 +583,7 @@ mod tests {
         );
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("starship".into(), starship)]),
         };
 

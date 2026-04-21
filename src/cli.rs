@@ -11,7 +11,7 @@ use clap_complete::{generate, Shell};
 use crate::config::RawConfig;
 use crate::error::ConchError;
 use crate::explain::{render_resolution, RenderOptions};
-use crate::provider::{BashProvider, FishProvider, ShellProvider};
+use crate::provider::{BashProvider, FishProvider};
 use crate::resolve::{resolve, resolve_with_details};
 
 /// Declarative shell-configuration compiler.
@@ -153,8 +153,8 @@ pub fn run() -> Result<(), ConchError> {
             let raw = load_selected_config(config)?;
             let ir = resolve(&raw, shell.as_str())?;
             let text = match shell {
-                ShellKind::Fish => FishProvider.render(&ir),
-                ShellKind::Bash => BashProvider.render(&ir),
+                ShellKind::Fish => FishProvider.render_init(&ir, raw.init.guard.enabled),
+                ShellKind::Bash => BashProvider.render_init(&ir, raw.init.guard.enabled),
             };
             print!("{text}");
             Ok(())

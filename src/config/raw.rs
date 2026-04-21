@@ -12,11 +12,27 @@ use serde::Deserialize;
 
 use super::EnvValue;
 
-/// Root document: only `blocks.<id>` entries are defined for v1.
+/// Root document: top-level init settings plus `blocks.<id>` entries.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawConfig {
+    #[serde(default)]
+    pub init: InitConfigToml,
     pub blocks: IndexMap<String, BlockConfigToml>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InitConfigToml {
+    #[serde(default)]
+    pub guard: InitGuardToml,
+}
+
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InitGuardToml {
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -105,6 +121,7 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(raw.init, InitConfigToml::default());
         let nvim = &raw.blocks["nvim"];
         assert_eq!(nvim.when, vec!["interactive"]);
         assert_eq!(nvim.requires, vec!["command:nvim"]);
@@ -118,6 +135,9 @@ mod tests {
     fn parses_non_string_env_scalars_in_toml() {
         let raw: RawConfig = toml::from_str(
             r"
+            [init.guard]
+            enabled = true
+
             [blocks.flags.env]
             ENABLE_TRACE = true
             RETRIES = 3
@@ -128,6 +148,8 @@ mod tests {
             ",
         )
         .unwrap();
+
+        assert!(raw.init.guard.enabled);
 
         let flags = &raw.blocks["flags"];
         assert_eq!(flags.env["ENABLE_TRACE"], EnvValue::from(true));
@@ -170,6 +192,9 @@ mod tests {
     fn parses_yaml_root_shape() {
         let raw: RawConfig = serde_yaml::from_str(
             r"
+init:
+  guard:
+    enabled: true
 blocks:
   simple:
     env:
@@ -182,6 +207,8 @@ blocks:
 ",
         )
         .unwrap();
+
+        assert!(raw.init.guard.enabled);
 
         let simple = &raw.blocks["simple"];
         assert_eq!(simple.env["EDITOR"], EnvValue::from("nvim"));
@@ -221,6 +248,11 @@ blocks:
     fn parses_json_root_shape() {
         let raw: RawConfig = serde_json::from_str(
             r#"{
+  "init": {
+    "guard": {
+      "enabled": true
+    }
+  },
   "blocks": {
     "simple": {
       "env": {
@@ -237,6 +269,8 @@ blocks:
 }"#,
         )
         .unwrap();
+
+        assert!(raw.init.guard.enabled);
 
         let simple = &raw.blocks["simple"];
         assert_eq!(simple.env["EDITOR"], EnvValue::from("nvim"));

@@ -109,6 +109,31 @@ fn init_renders_shell_override_and_target_shell_predicates() {
 }
 
 #[test]
+fn init_renders_shell_specific_source_guards() {
+    let fish = stdout(run(&[
+        "init",
+        "fish",
+        "--config",
+        "tests/fixtures/golden/guarded.toml",
+    ]));
+    assert!(fish.contains("if not set -q __CONCH_FISH_SOURCED"));
+    assert!(fish.contains("set -g __CONCH_SOURCED 1"));
+    assert!(fish.contains("set -g __CONCH_FISH_SOURCED 1"));
+    assert!(!fish.contains("if not set -q __CONCH_SOURCED"));
+
+    let bash = stdout(run(&[
+        "init",
+        "bash",
+        "--config",
+        "tests/fixtures/golden/guarded.toml",
+    ]));
+    assert!(bash.contains("if [[ -z \"${__CONCH_BASH_SOURCED:-}\" ]]; then"));
+    assert!(bash.contains("__CONCH_SOURCED=1"));
+    assert!(bash.contains("__CONCH_BASH_SOURCED=1"));
+    assert!(!bash.contains("[[ -z \"${__CONCH_SOURCED:-}\" ]]"));
+}
+
+#[test]
 fn explain_preserves_deterministic_order_when_no_edges_exist() {
     let output = run(&[
         "explain",

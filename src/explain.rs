@@ -276,6 +276,7 @@ mod tests {
         nvim.after.push("base".into());
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), base), ("nvim".into(), nvim)]),
         };
 
@@ -308,6 +309,7 @@ mod tests {
         );
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("starship".into(), starship)]),
         };
 
@@ -330,6 +332,7 @@ mod tests {
             .insert("EDITOR".into(), EnvValue::String("nvim".into()));
 
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
@@ -347,6 +350,7 @@ mod tests {
     #[test]
     fn renders_ansi_styles_when_color_is_enabled() {
         let raw = RawConfig {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), BlockConfigToml::default())]),
         };
         let resolution = resolve_with_details(&raw, "fish").unwrap();

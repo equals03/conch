@@ -247,6 +247,7 @@ mod tests {
         nvim.after.push("base".into());
 
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([
                 ("base".into(), base),
                 ("nvim".into(), nvim),
@@ -268,6 +269,7 @@ mod tests {
         base.before.push("nvim".into());
 
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("base".into(), base), ("nvim".into(), block())]),
         };
 
@@ -286,6 +288,7 @@ mod tests {
         c.before.push("a".into());
 
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), a), ("b".into(), b), ("c".into(), c)]),
         };
 
@@ -301,6 +304,7 @@ mod tests {
         a.before.push("missing".into());
 
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), a)]),
         };
 
@@ -315,6 +319,7 @@ mod tests {
         a.after.push("a".into());
 
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), a)]),
         };
 
@@ -326,6 +331,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_block_ids_in_order() {
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), block()), ("b".into(), block())]),
         };
 
@@ -337,6 +343,7 @@ mod tests {
     #[test]
     fn rejects_unknown_block_ids_in_order() {
         let config = Config {
+            init: Default::default(),
             blocks: IndexMap::from([("a".into(), block())]),
         };
 

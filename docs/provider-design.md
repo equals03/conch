@@ -16,6 +16,7 @@ Providers own only:
 
 - guard rendering for a specific shell
 - action rendering for a specific shell
+- top-level init guard rendering for a specific shell (for example shell-specific sourced variables)
 - shell-specific tradeoff documentation
 - safe provider-side guard shaping such as hoisting adjacent shared `interactive` / `login` checks without changing app order
 - verbatim emission of `SourceLines` actions (conch does not validate shell syntax; authors use `when` / `requires` like any other app block)
@@ -29,6 +30,7 @@ Providers own only:
   - `status is-login`
   - `command -q <name>`
 - Hoists adjacent shared `interactive` / `login` guard prefixes when safe, then renders residual guards per app block.
+- When `[init.guard] enabled = true`, guards re-sourcing with `__CONCH_FISH_SOURCED` while also setting `__CONCH_SOURCED`.
 - Uses `fish_add_path` for path operations.
 - Supports precise `move_front` / `move_back` with `fish_add_path --move`.
 
@@ -39,6 +41,7 @@ Providers own only:
   - `shopt -q login_shell`
   - `command -v <name> >/dev/null 2>&1`
 - Hoists adjacent shared `interactive` / `login` guard prefixes when safe, then renders residual guards per app block.
+- When `[init.guard] enabled = true`, guards re-sourcing with `__CONCH_BASH_SOURCED` while also setting `__CONCH_SOURCED`.
 - Renders PATH directly with `export PATH=...`.
 - In v1, `move_front` and `move_back` are approximated as prepend/append.
 - This approximation is intentional for v1 to keep the generated output simple and readable.

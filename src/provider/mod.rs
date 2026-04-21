@@ -15,7 +15,7 @@ pub trait ShellProvider {
     fn render(&self, ir: &ResolvedIr) -> String;
 }
 
-fn normalize_home(value: &str) -> String {
+fn normalise_home(value: &str) -> String {
     if value == "~" {
         "$HOME".into()
     } else if let Some(rest) = value.strip_prefix("~/") {

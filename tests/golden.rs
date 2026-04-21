@@ -24,3 +24,17 @@ fn bash_output_matches_golden() {
     let expected = fs::read_to_string("tests/fixtures/golden/basic.bash").unwrap();
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn guarded_fish_output_matches_golden() {
+    let actual = run_init("fish", "tests/fixtures/golden/guarded.toml");
+    let expected = fs::read_to_string("tests/fixtures/golden/guarded.fish").unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn guarded_bash_output_matches_golden() {
+    let actual = run_init("bash", "tests/fixtures/golden/guarded.toml");
+    let expected = fs::read_to_string("tests/fixtures/golden/guarded.bash").unwrap();
+    assert_eq!(actual, expected);
+}

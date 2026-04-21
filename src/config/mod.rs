@@ -33,7 +33,9 @@ fn env_value_reject_float<E: de::Error>(value: f64) -> Result<EnvValue, E> {
     ))
 }
 
-pub use raw::{BlockConfigToml, PathSpecToml, RawConfig, ShellOverridesToml};
+pub use raw::{
+    BlockConfigToml, InitConfigToml, InitGuardToml, PathSpecToml, RawConfig, ShellOverridesToml,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvValue {
@@ -186,7 +188,18 @@ impl<'de> Deserialize<'de> for EnvValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    pub init: InitConfig,
     pub blocks: IndexMap<String, BlockConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InitConfig {
+    pub guard: InitGuardConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InitGuardConfig {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,7 +246,12 @@ impl TryFrom<&RawConfig> for Config {
             blocks.insert(block_id.clone(), block.clone().into());
         }
 
-        Ok(Self { blocks })
+        let config = Self {
+            init: raw.init.clone().into(),
+            blocks,
+        };
+        validate_init_guard_reserved_env_keys(&config)?;
+        Ok(config)
     }
 }
 
@@ -249,6 +267,64 @@ fn validate_block_id(block_id: &str) -> Result<(), ConchError> {
     }
 
     Ok(())
+}
+
+fn validate_init_guard_reserved_env_keys(config: &Config) -> Result<(), ConchError> {
+    if !config.init.guard.enabled {
+        return Ok(());
+    }
+
+    for (block_id, block) in &config.blocks {
+        validate_reserved_env_scope(block_id, None, &block.env)?;
+        for (shell, override_cfg) in &block.shell {
+            validate_reserved_env_scope(block_id, Some(shell.as_str()), &override_cfg.env)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_reserved_env_scope(
+    block_id: &str,
+    shell: Option<&str>,
+    env: &IndexMap<String, EnvValue>,
+) -> Result<(), ConchError> {
+    for key in env.keys() {
+        if is_reserved_init_guard_env_key(key) {
+            let scope = match shell {
+                Some(shell) => format!("block `{block_id}` shell override `{shell}`"),
+                None => format!("block `{block_id}`"),
+            };
+            return Err(ConchError::Validation(format!(
+                "{scope} cannot set reserved env key `{key}` when `[init.guard] enabled = true`; conch emits that variable automatically"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn is_reserved_init_guard_env_key(key: &str) -> bool {
+    matches!(
+        key,
+        "__CONCH_SOURCED" | "__CONCH_FISH_SOURCED" | "__CONCH_BASH_SOURCED"
+    )
+}
+
+impl From<InitConfigToml> for InitConfig {
+    fn from(value: InitConfigToml) -> Self {
+        Self {
+            guard: value.guard.into(),
+        }
+    }
+}
+
+impl From<InitGuardToml> for InitGuardConfig {
+    fn from(value: InitGuardToml) -> Self {
+        Self {
+            enabled: value.enabled,
+        }
+    }
 }
 
 impl From<BlockConfigToml> for BlockConfig {
@@ -320,6 +396,7 @@ mod tests {
         .unwrap();
 
         let config = Config::try_from(&raw).unwrap();
+        assert_eq!(config.init, InitConfig::default());
         let nvim = &config.blocks["nvim"];
         assert_eq!(nvim.when, vec!["interactive"]);
         assert_eq!(nvim.requires, vec!["command:nvim"]);
@@ -369,5 +446,63 @@ mod tests {
         let err = Config::try_from(&raw).unwrap_err();
         assert!(matches!(err, ConchError::Validation(_)));
         assert!(err.to_string().contains("leading or trailing whitespace"));
+    }
+
+    #[test]
+    fn converts_init_guard_settings() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [init.guard]
+            enabled = true
+
+            [blocks.demo.env]
+            EDITOR = "nvim"
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::try_from(&raw).unwrap();
+        assert!(config.init.guard.enabled);
+    }
+
+    #[test]
+    fn rejects_reserved_env_keys_when_init_guard_is_enabled() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [init.guard]
+            enabled = true
+
+            [blocks.demo.env]
+            __CONCH_SOURCED = "1"
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err
+            .to_string()
+            .contains("reserved env key `__CONCH_SOURCED`"));
+    }
+
+    #[test]
+    fn rejects_reserved_env_keys_in_shell_overrides_when_init_guard_is_enabled() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [init.guard]
+            enabled = true
+
+            [blocks.demo.shell.fish.env]
+            __CONCH_FISH_SOURCED = "1"
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err.to_string().contains("shell override `fish`"));
+        assert!(err
+            .to_string()
+            .contains("reserved env key `__CONCH_FISH_SOURCED`"));
     }
 }

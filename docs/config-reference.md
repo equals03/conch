@@ -2,9 +2,12 @@
 
 ## Root shape
 
-Conch v1 defines configuration under `app.<id>` tables.
+Conch v1 defines optional top-level init settings plus `blocks.<id>` tables.
 
 ```toml
+[init.guard]
+enabled = true
+
 [blocks.nvim]
 when = ["interactive"]
 requires = ["command:nvim"]
@@ -22,6 +25,28 @@ prepend = ["~/.local/bin"]
 [blocks.nvim.shell.fish.alias]
 v = "nvim"
 ```
+
+## Root fields
+
+### `[init.guard]`
+
+Optional top-level init-output guard settings.
+
+#### `enabled = true`
+
+When enabled, `conch init fish` / `conch init bash` wrap the rendered shell body in a shell-specific sourced guard.
+
+Conch emits:
+
+- `__CONCH_SOURCED = 1`
+- `__CONCH_FISH_SOURCED = 1` for Fish output
+- `__CONCH_BASH_SOURCED = 1` for Bash output
+
+Only the shell-specific variable is used as the generated guard condition. The shared `__CONCH_SOURCED` variable is emitted for user scripts or sourced snippets that want to observe that conch has already been sourced.
+
+These guard variables are shell-local (`set -g` in Fish, plain assignment in Bash), not exported to child processes.
+
+When this guard is enabled, conch reserves these env keys and rejects configs that try to write them from a block or shell override.
 
 ## App fields
 
