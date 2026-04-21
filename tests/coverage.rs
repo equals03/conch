@@ -86,9 +86,9 @@ fn check_reports_cycle_fixture() {
 }
 
 #[test]
-fn build_renders_shell_override_and_target_shell_predicates() {
+fn init_renders_shell_override_and_target_shell_predicates() {
     let fish = stdout(run(&[
-        "build",
+        "init",
         "fish",
         "--config",
         "tests/fixtures/configs/shell-override.toml",
@@ -98,7 +98,7 @@ fn build_renders_shell_override_and_target_shell_predicates() {
     assert!(fish.contains("if begin; begin; set -q EDITOR; and test -n \"$EDITOR\"; end; and begin; set -q VISUAL; and test \"$VISUAL\" = \"nvim\"; end; end"));
 
     let bash = stdout(run(&[
-        "build",
+        "init",
         "bash",
         "--config",
         "tests/fixtures/configs/shell-override.toml",

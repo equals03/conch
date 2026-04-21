@@ -8,7 +8,7 @@ This document closes out the current plan by recording near-term design consider
 
 Optional positional shell argument; already supported.
 
-### `conch build --output <path>`
+### `conch init --output <path>`
 
 Likely worthwhile later as a convenience wrapper around stdout redirection.
 Not needed for the core compiler semantics.
@@ -43,7 +43,7 @@ Would help with:
 
 ### `conch export`
 
-If added later, it should share as much as possible with `build`:
+If added later, it should share as much as possible with `init`:
 
 - same config parsing
 - same predicate parsing

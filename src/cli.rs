@@ -1,4 +1,4 @@
-//! CLI entry (`check`, `build`, `explain`, `complete`).
+//! CLI entry (`check`, `init`, `explain`, `complete`).
 
 use std::fs;
 use std::io::{self, IsTerminal};
@@ -32,12 +32,12 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Option<ShellKind>,
     },
-    /// Compile config and print shell-native output to stdout.
-    Build {
+    /// Generate shell-native init output and print it to stdout.
+    Init {
         /// Path to config file (.toml, .yaml, .yml, or .json)
         #[arg(long, default_value = "conch.toml")]
         config: PathBuf,
-        /// Target shell to compile for.
+        /// Target shell to generate init output for.
         #[arg(value_enum)]
         shell: ShellKind,
     },
@@ -134,19 +134,19 @@ pub fn run() -> Result<(), ConchError> {
             let raw = load_config(&config)?;
             match shell {
                 Some(shell) => {
-                    resolve(&raw, Some(shell.as_str()))?;
+                    resolve(&raw, shell.as_str())?;
                 }
                 None => {
                     for shell in [ShellKind::Fish, ShellKind::Bash] {
-                        resolve(&raw, Some(shell.as_str()))?;
+                        resolve(&raw, shell.as_str())?;
                     }
                 }
             }
             Ok(())
         }
-        Command::Build { config, shell } => {
+        Command::Init { config, shell } => {
             let raw = load_config(&config)?;
-            let ir = resolve(&raw, Some(shell.as_str()))?;
+            let ir = resolve(&raw, shell.as_str())?;
             let text = match shell {
                 ShellKind::Fish => FishProvider.render(&ir),
                 ShellKind::Bash => BashProvider.render(&ir),
@@ -160,7 +160,7 @@ pub fn run() -> Result<(), ConchError> {
             color,
         } => {
             let raw = load_config(&config)?;
-            let resolution = resolve_with_details(&raw, Some(shell.as_str()))?;
+            let resolution = resolve_with_details(&raw, shell.as_str())?;
             let text = render_resolution(
                 &resolution,
                 RenderOptions {

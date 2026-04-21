@@ -1,12 +1,14 @@
 //! Graph ordering, conflict analysis, and shell-targeted resolution.
 //!
 //! Semantics:
-//! - `conch` does not evaluate predicates against the host during build/check/explain
+//! - `conch` does not evaluate predicates against the host during check/init/explain
 //! - all blocks are ordered statically through the block graph
 //! - providers render `when` / `requires` as shell-native guards
 //! - env and alias conflicts are checked conservatively across all blocks
 //! - if two blocks write the same env/alias key and the graph does not order them,
 //!   resolution fails even if their runtime predicates might differ
+
+use std::borrow::Cow;
 
 use indexmap::IndexMap;
 
@@ -61,7 +63,7 @@ pub struct PathContribution {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolution {
-    pub target_shell: Option<String>,
+    pub target_shell: String,
     pub block_order: Vec<String>,
     pub ir: ResolvedIr,
     pub block_reports: Vec<BlockReport>,
@@ -70,13 +72,13 @@ pub struct Resolution {
     pub path_ops: Vec<PathContribution>,
 }
 
-pub fn resolve(raw: &RawConfig, target_shell: Option<&str>) -> Result<ResolvedIr, ConchError> {
+pub fn resolve(raw: &RawConfig, target_shell: &str) -> Result<ResolvedIr, ConchError> {
     Ok(resolve_with_details(raw, target_shell)?.ir)
 }
 
 pub fn resolve_with_details(
     raw: &RawConfig,
-    target_shell: Option<&str>,
+    target_shell: &str,
 ) -> Result<Resolution, ConchError> {
     let config = Config::try_from(raw)?;
 
@@ -86,7 +88,7 @@ pub fn resolve_with_details(
     let merge = build_blocks_and_reports(&config, &graph, &order, target_shell)?;
 
     Ok(Resolution {
-        target_shell: target_shell.map(str::to_string),
+        target_shell: target_shell.to_string(),
         block_order: order,
         ir: merge.ir,
         block_reports: merge.block_reports,
@@ -108,9 +110,8 @@ fn build_blocks_and_reports(
     config: &Config,
     graph: &crate::graph::BlockGraph,
     order: &[String],
-    target_shell: Option<&str>,
+    shell: &str,
 ) -> Result<MergeOutcome, ConchError> {
-    let shell = target_shell.unwrap_or_default();
     let mut ir = ResolvedIr::default();
     let mut block_reports = Vec::new();
     let mut env_writers: IndexMap<String, Vec<BindingWrite>> = IndexMap::new();
@@ -204,13 +205,13 @@ where
             let ordered = graph.ordered_before(&previous.block_id, block_id)
                 || graph.ordered_before(block_id, &previous.block_id);
             if !ordered {
-                let shell_context = if shell.is_empty() {
-                    "for the current target".to_string()
+                let shell_phrase: Cow<'_, str> = if shell.is_empty() {
+                    Cow::Borrowed("for the current target")
                 } else {
-                    format!("for shell `{shell}`")
+                    Cow::Owned(format!("for shell `{shell}`"))
                 };
                 return Err(ConchError::MergeConflict(format!(
-                    "{kind} key `{key}` is written by blocks `{}` and `{block_id}` {shell_context}, but the block graph does not order them. Add `before` or `after` to make the write order explicit.",
+                    "{kind} key `{key}` is written by blocks `{}` and `{block_id}` {shell_phrase}, but the block graph does not order them. Add `before` or `after` to make the write order explicit.",
                     previous.block_id
                 )));
             }
@@ -390,6 +391,16 @@ mod tests {
         BlockConfigToml::default()
     }
 
+    fn raw_unordered_alias_conflict() -> RawConfig {
+        let mut a = sample_block();
+        a.alias.insert("vim".into(), "nvim".into());
+        let mut b = sample_block();
+        b.alias.insert("vim".into(), "hx".into());
+        RawConfig {
+            blocks: IndexMap::from([("a".into(), a), ("b".into(), b)]),
+        }
+    }
+
     #[test]
     fn builds_ordered_guarded_blocks() {
         let mut base = sample_block();
@@ -405,7 +416,7 @@ mod tests {
             blocks: IndexMap::from([("base".into(), base), ("nvim".into(), nvim)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         assert_eq!(resolution.block_order, vec!["base", "nvim"]);
         assert_eq!(resolution.ir.blocks.len(), 2);
         assert_eq!(resolution.ir.blocks[1].block_id, "nvim");
@@ -414,19 +425,19 @@ mod tests {
 
     #[test]
     fn reports_unordered_conflicts_with_shell_context() {
-        let mut a = sample_block();
-        a.alias.insert("vim".into(), "nvim".into());
-
-        let mut b = sample_block();
-        b.alias.insert("vim".into(), "hx".into());
-
-        let raw = RawConfig {
-            blocks: IndexMap::from([("a".into(), a), ("b".into(), b)]),
-        };
-
-        let err = resolve(&raw, Some("fish")).unwrap_err();
+        let raw = raw_unordered_alias_conflict();
+        let err = resolve(&raw, "fish").unwrap_err();
         assert!(matches!(err, ConchError::MergeConflict(_)));
         assert!(err.to_string().contains("for shell `fish`"));
+        assert!(err.to_string().contains("Add `before` or `after`"));
+    }
+
+    #[test]
+    fn reports_unordered_conflicts_for_unnamed_shell_target() {
+        let raw = raw_unordered_alias_conflict();
+        let err = resolve(&raw, "").unwrap_err();
+        assert!(matches!(err, ConchError::MergeConflict(_)));
+        assert!(err.to_string().contains("for the current target"));
         assert!(err.to_string().contains("Add `before` or `after`"));
     }
 
@@ -446,7 +457,7 @@ mod tests {
             blocks: IndexMap::from([("nvim".into(), cfg)]),
         };
 
-        let ir = resolve(&raw, Some("fish")).unwrap();
+        let ir = resolve(&raw, "fish").unwrap();
         assert_eq!(ir.blocks[0].actions.len(), 2);
     }
 
@@ -463,7 +474,7 @@ mod tests {
             blocks: IndexMap::from([("guarded".into(), guarded), ("plain".into(), plain)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         assert_eq!(resolution.block_reports.len(), 2);
         assert!(resolution.block_reports.iter().any(|r| r.guarded));
         assert!(resolution.block_reports.iter().any(|r| !r.guarded));
@@ -478,7 +489,7 @@ mod tests {
             blocks: IndexMap::from([("broken".into(), broken)]),
         };
 
-        let err = resolve(&raw, Some("fish")).unwrap_err();
+        let err = resolve(&raw, "fish").unwrap_err();
         assert!(matches!(err, ConchError::PredicateParse(_)));
         assert!(err
             .to_string()
@@ -503,10 +514,10 @@ mod tests {
             blocks: IndexMap::from([("base".into(), base), ("fish_only".into(), fish_only)]),
         };
 
-        let fish_err = resolve(&raw, Some("fish")).unwrap_err();
+        let fish_err = resolve(&raw, "fish").unwrap_err();
         assert!(matches!(fish_err, ConchError::MergeConflict(_)));
 
-        let bash_ir = resolve(&raw, Some("bash")).unwrap();
+        let bash_ir = resolve(&raw, "bash").unwrap();
         assert_eq!(bash_ir.blocks.len(), 1);
     }
 
@@ -526,7 +537,7 @@ mod tests {
             blocks: IndexMap::from([("bat".into(), cfg)]),
         };
 
-        let fish_ir = resolve(&raw, Some("fish")).unwrap();
+        let fish_ir = resolve(&raw, "fish").unwrap();
         assert_eq!(fish_ir.blocks[0].actions.len(), 1);
     }
 
@@ -540,7 +551,7 @@ mod tests {
             blocks: IndexMap::from([("base".into(), base)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         assert_eq!(resolution.path_ops.len(), 2);
         assert_eq!(resolution.path_ops[0].block_id, "base");
         assert_eq!(resolution.path_ops[1].block_id, "base");
@@ -570,7 +581,7 @@ mod tests {
             blocks: IndexMap::from([("starship".into(), starship)]),
         };
 
-        let fish = resolve(&raw, Some("fish")).unwrap();
+        let fish = resolve(&raw, "fish").unwrap();
         assert_eq!(fish.blocks[0].actions.len(), 1);
         assert_eq!(
             fish.blocks[0].actions[0],
@@ -579,7 +590,7 @@ mod tests {
             }
         );
 
-        let bash = resolve(&raw, Some("bash")).unwrap();
+        let bash = resolve(&raw, "bash").unwrap();
         assert_eq!(bash.blocks[0].actions.len(), 1);
         assert_eq!(
             bash.blocks[0].actions[0],
@@ -588,7 +599,7 @@ mod tests {
             }
         );
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         let report = resolution
             .block_reports
             .iter()

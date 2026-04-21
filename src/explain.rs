@@ -19,12 +19,15 @@ pub fn render_resolution(resolution: &Resolution, options: RenderOptions) -> Str
     let style = Style {
         color: options.color,
     };
-    let shell = resolution.target_shell.as_deref().unwrap_or("unknown");
+    let shell = match resolution.target_shell.as_str() {
+        "" => "unknown",
+        name => name,
+    };
     let contributions = block_contributions(resolution);
 
     writeln!(
         out,
-        "{}  {}",
+        "{} {}",
         style.bold("conch explain"),
         style.cyan(shell)
     )
@@ -282,10 +285,10 @@ mod tests {
             blocks: IndexMap::from([("base".into(), base), ("nvim".into(), nvim)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         let text = render_resolution(&resolution, RenderOptions::default());
 
-        assert!(text.contains("conch explain  fish"));
+        assert!(text.contains("conch explain fish"));
         assert!(text.contains("Block order"));
         assert!(text.contains("  1. base"));
         assert!(text.contains("  2. nvim"));
@@ -314,7 +317,7 @@ mod tests {
             blocks: IndexMap::from([("starship".into(), starship)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         let text = render_resolution(&resolution, RenderOptions::default());
 
         assert!(text.contains("starship  guarded"));
@@ -336,7 +339,7 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         let text = render_resolution(&resolution, RenderOptions::default());
 
         assert!(text.contains("env ENABLED=true"));
@@ -352,7 +355,7 @@ mod tests {
         let raw = RawConfig {
             blocks: IndexMap::from([("base".into(), BlockConfigToml::default())]),
         };
-        let resolution = resolve_with_details(&raw, Some("fish")).unwrap();
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
         let text = render_resolution(&resolution, RenderOptions { color: true });
 
         assert!(text.contains("\x1b[1mconch explain\x1b[0m"));

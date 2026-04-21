@@ -95,6 +95,6 @@ requires = ["dir:~/.local/bin"]
 
 ## v1 notes
 
-- conch validates predicate syntax but does not evaluate predicates during build/check/explain
+- conch validates predicate syntax but does not evaluate predicates during check/init/explain
 - providers compile these predicates into shell-native checks
 - conflict detection does not attempt predicate satisfiability or mutual-exclusion reasoning

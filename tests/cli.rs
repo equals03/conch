@@ -1,10 +1,10 @@
 use std::process::Command;
 
 #[test]
-fn binary_builds_fish_output() {
+fn binary_inits_fish_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_conch"))
         .args([
-            "build",
+            "init",
             "fish",
             "--config",
             "tests/fixtures/configs/simple-single.toml",
@@ -29,10 +29,10 @@ fn check_can_target_a_single_shell() {
 }
 
 #[test]
-fn binary_builds_yaml_output() {
+fn binary_inits_yaml_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_conch"))
         .args([
-            "build",
+            "init",
             "fish",
             "--config",
             "tests/fixtures/configs/simple-single.yaml",
@@ -47,10 +47,10 @@ fn binary_builds_yaml_output() {
 }
 
 #[test]
-fn binary_builds_json_output() {
+fn binary_inits_json_output() {
     let output = Command::new(env!("CARGO_BIN_EXE_conch"))
         .args([
-            "build",
+            "init",
             "fish",
             "--config",
             "tests/fixtures/configs/simple-single.json",
@@ -80,7 +80,7 @@ fn explain_reports_resolution_shape() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("conch explain  fish"));
+    assert!(stdout.contains("conch explain fish"));
     assert!(stdout.contains("Block order"));
     assert!(stdout.contains("Blocks"));
     assert!(stdout.contains("Env bindings"));
