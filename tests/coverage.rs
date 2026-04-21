@@ -134,6 +134,27 @@ fn init_renders_shell_specific_source_guards() {
 }
 
 #[test]
+fn init_renders_structured_source_entries() {
+    let fish = stdout(run(&[
+        "init",
+        "fish",
+        "--config",
+        "tests/fixtures/configs/structured-source.toml",
+    ]));
+    assert!(fish.contains("source \"$HOME/.shared-rc\""));
+    assert!(fish.contains("\"starship\" \"init\" \"fish\" | source"));
+
+    let bash = stdout(run(&[
+        "init",
+        "bash",
+        "--config",
+        "tests/fixtures/configs/structured-source.toml",
+    ]));
+    assert!(bash.contains("source \"$HOME/.shared-rc\""));
+    assert!(bash.contains("eval \"$('starship' 'init' 'bash')\""));
+}
+
+#[test]
 fn explain_preserves_deterministic_order_when_no_edges_exist() {
     let output = run(&[
         "explain",

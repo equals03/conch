@@ -234,6 +234,7 @@ mod tests {
             env: IndexMap::new(),
             alias: IndexMap::new(),
             path: PathSpec::default(),
+            source: Vec::new(),
             shell: IndexMap::<String, ShellOverride>::new(),
         }
     }

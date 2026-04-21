@@ -1,0 +1,9 @@
+[blocks.shared]
+when = ["interactive"]
+source = ["~/.shared-rc"]
+
+[blocks.shared.shell.fish]
+source = [{ command = ["starship", "init", "{shell}"] }]
+
+[blocks.shared.shell.bash]
+source = [{ command = ["starship", "init", "{shell}"] }]

@@ -32,7 +32,7 @@ At a high level it:
 - Block-oriented config under `blocks.<id>`
 - `when`, `requires`, `before`, `after`
 - `env` (strings, booleans, integers, or `{ raw = "..." }` for provider-specific fragments), `alias`, and structured `path` (`prepend` / `append` / `move_front` / `move_back`)
-- Shell-specific tables under `shell.fish` / `shell.bash` for `env`, `alias`, `path`, and verbatim `source_lines`
+- Structured `source` entries for files and command-output sourcing, plus shell-specific tables under `shell.fish` / `shell.bash` for `env`, `alias`, `path`, extra `source`, and verbatim `source_lines`
 - Fish and Bash providers
 - Optional top-level init guard to prevent re-sourcing the same generated shell output
 - `check`, `init`, and `explain` commands
@@ -129,8 +129,8 @@ The bundled `examples/conch.*` files are intentionally verbose: they show how bl
 - **Predicates** — `when` (such as `interactive`, `login`, `os:linux`) and `requires` (such as `command:…`, `dir:…`, and `!command:…` for mutual exclusion).
 - **Structured `PATH`** — `prepend`, `append`, and `move_front`.
 - **Env** — plain strings, boolean/integer flags, and `{ raw = "…" }` for shell-specific values (see `shell-ident`).
-- **Shell overrides** — `shell.fish` / `shell.bash` for extra `alias` / `env` / `path`, plus `source_lines` emitted verbatim after structured fields in that block.
-- **Third-party init patterns** — guarded `source_lines` for Starship, zoxide, direnv, fzf, and similar tools.
+- **Shell overrides** — `shell.fish` / `shell.bash` for extra `alias` / `env` / `path`, extra structured `source`, plus `source_lines` emitted verbatim after structured fields in that block.
+- **Third-party init patterns** — guarded structured `source` entries for Starship, zoxide, direnv, fzf, and similar tools.
 
 Use them as a cookbook: copy the blocks you need, drop the rest, and tighten `requires` to match your machine.
 

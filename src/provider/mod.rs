@@ -112,6 +112,14 @@ fn canonical_hoistable_key(predicates: &[Predicate]) -> Vec<(u8, bool)> {
     key
 }
 
+/// Replace the `{shell}` placeholder in each command argument for the target shell.
+pub(crate) fn source_command_for_shell(command: &[String], shell: &str) -> Vec<String> {
+    command
+        .iter()
+        .map(|part| part.replace("{shell}", shell))
+        .collect()
+}
+
 /// Emit `text` with `prefix` at the start and after every `\n`; append `\n` if `text` has no trailing newline.
 pub(crate) fn push_indented_verbatim(out: &mut String, text: &str, prefix: &str) {
     out.push_str(prefix);

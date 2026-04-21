@@ -91,6 +91,25 @@ Supported keys:
 - `move_front = [..]`
 - `move_back = [..]`
 
+### `source = [..]`
+
+Structured source actions. Supported both directly under `[blocks.<id>]` and under `[blocks.<id>.shell.<name>]`.
+
+Each entry must be one of:
+
+- a string, shorthand for `{ file = "..." }`
+- `{ file = "..." }`
+- `{ command = ["arg0", "arg1", ...] }`
+
+Command entries are shell-neutral data, not shell code strings. Providers render them as shell-native command-output sourcing:
+
+- Fish: `<command> | source`
+- Bash: `eval "$(<command>)"`
+
+Within `command = [..]`, any `{shell}` substring is replaced with the current target shell name during rendering.
+
+When both block-level `source` and shell-override `source` are present, conch emits the block-level entries first and the shell-specific entries after them.
+
 ### `[blocks.<id>.shell.<name>]`
 
 Optional shell-specific overrides.
@@ -103,7 +122,7 @@ Unknown shell sections are allowed and ignored by v1 providers unless a future p
 
 #### `source_lines = [..]` (under `[blocks.<id>.shell.<name>]`)
 
-A list of strings emitted **verbatim** by the target shell provider, after structured `env`, `alias`, and `path` actions from the same app block. Each string is one or more physical lines; conch does not validate, rewrite, or sandbox this text (same trust model as editing an rc file by hand).
+A list of strings emitted **verbatim** by the target shell provider, after structured `env`, `alias`, `path`, and `source` actions from the same app block. Each string is one or more physical lines; conch does not validate, rewrite, or sandbox this text (same trust model as editing an rc file by hand).
 
 Use `when` / `requires` on the app to guard these lines (for example `interactive` and `command:starship`).
 

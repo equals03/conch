@@ -92,66 +92,41 @@
       "when": ["interactive"],
       "requires": ["command:starship"],
       "after": ["core"],
-      "shell": {
-        "fish": {
-          "source_lines": ["starship init fish | source"]
-        },
-        "bash": {
-          "source_lines": ["eval \"$(starship init bash)\""]
-        }
-      }
+      "source": [
+        { "command": ["starship", "init", "{shell}"] }
+      ]
     },
     "zoxide": {
       "when": ["interactive"],
       "requires": ["command:zoxide"],
       "after": ["core"],
-      "shell": {
-        "fish": {
-          "source_lines": ["zoxide init fish | source"]
-        },
-        "bash": {
-          "source_lines": ["eval \"$(zoxide init bash)\""]
-        }
-      }
+      "source": [
+        { "command": ["zoxide", "init", "{shell}"] }
+      ]
     },
     "direnv": {
       "when": ["interactive"],
       "requires": ["command:direnv"],
       "after": ["core"],
-      "shell": {
-        "fish": {
-          "source_lines": ["direnv hook fish | source"]
-        },
-        "bash": {
-          "source_lines": ["eval \"$(direnv hook bash)\""]
-        }
-      }
+      "source": [
+        { "command": ["direnv", "hook", "{shell}"] }
+      ]
     },
     "fzf": {
       "when": ["interactive"],
       "requires": ["command:fzf", "!command:tv"],
       "after": ["core"],
-      "shell": {
-        "fish": {
-          "source_lines": ["fzf --fish | source"]
-        },
-        "bash": {
-          "source_lines": ["eval \"$(fzf --bash)\""]
-        }
-      }
+      "source": [
+        { "command": ["fzf", "--{shell}"] }
+      ]
     },
     "tv": {
       "when": ["interactive"],
       "requires": ["command:tv"],
       "after": ["fzf"],
-      "shell": {
-        "fish": {
-          "source_lines": ["tv init fish | source"]
-        },
-        "bash": {
-          "source_lines": ["eval \"$(tv init bash)\""]
-        }
-      }
+      "source": [
+        { "command": ["tv", "init", "{shell}"] }
+      ]
     },
     "stow-hint": {
       "when": ["interactive"],

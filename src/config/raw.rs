@@ -7,8 +7,11 @@
 //! [`EnvValue`] uses a custom deserializer; unsupported scalar shapes fail with the same
 //! expectation string as other `EnvValue` parse errors.
 
+use std::fmt;
+
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::de::{self, value::MapAccessDeserializer, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 
 use super::EnvValue;
 
@@ -52,6 +55,8 @@ pub struct BlockConfigToml {
     pub alias: IndexMap<String, String>,
     #[serde(default)]
     pub path: PathSpecToml,
+    #[serde(default)]
+    pub source: Vec<SourceEntryToml>,
     /// Key: shell name, e.g. `fish`, `bash`.
     #[serde(default)]
     pub shell: IndexMap<String, ShellOverridesToml>,
@@ -66,9 +71,66 @@ pub struct ShellOverridesToml {
     pub alias: IndexMap<String, String>,
     #[serde(default)]
     pub path: PathSpecToml,
+    #[serde(default)]
+    pub source: Vec<SourceEntryToml>,
     /// Shell-specific lines emitted verbatim by the target provider.
     #[serde(default)]
     pub source_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceEntryToml {
+    File(String),
+    Structured(SourceEntryFieldsToml),
+}
+
+impl<'de> Deserialize<'de> for SourceEntryToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct SourceEntryVisitor;
+
+        impl<'de> Visitor<'de> for SourceEntryVisitor {
+            type Value = SourceEntryToml;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(
+                    "a source entry string or a table with exactly one of `file` or `command`",
+                )
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(SourceEntryToml::File(value.to_string()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(SourceEntryToml::File(value))
+            }
+
+            fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+            where
+                M: MapAccess<'de>,
+            {
+                let fields = SourceEntryFieldsToml::deserialize(MapAccessDeserializer::new(map))?;
+                Ok(SourceEntryToml::Structured(fields))
+            }
+        }
+
+        deserializer.deserialize_any(SourceEntryVisitor)
+    }
+}
+
+#[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SourceEntryFieldsToml {
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone, PartialEq, Eq)]
@@ -159,6 +221,43 @@ mod tests {
             EnvValue::from(false)
         );
         assert_eq!(flags.shell["fish"].env["DEPTH"], EnvValue::from(1_i64));
+    }
+
+    #[test]
+    fn parses_structured_source_entries() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.baile]
+            source = ["~/.baile-env", { command = ["starship", "init", "{shell}"] }]
+
+            [blocks.baile.shell.fish]
+            source = [{ file = "~/.config/fish/local.fish" }]
+            "#,
+        )
+        .unwrap();
+
+        let baile = &raw.blocks["baile"];
+        assert_eq!(
+            baile.source,
+            vec![
+                SourceEntryToml::File("~/.baile-env".to_string()),
+                SourceEntryToml::Structured(SourceEntryFieldsToml {
+                    file: None,
+                    command: Some(vec![
+                        "starship".to_string(),
+                        "init".to_string(),
+                        "{shell}".to_string(),
+                    ]),
+                }),
+            ]
+        );
+        assert_eq!(
+            baile.shell["fish"].source,
+            vec![SourceEntryToml::Structured(SourceEntryFieldsToml {
+                file: Some("~/.config/fish/local.fish".to_string()),
+                command: None,
+            })]
+        );
     }
 
     #[test]
@@ -478,6 +577,18 @@ blocks:
             r#"
             [blocks.demo.path]
             preprend = ["~/bin"]
+            "#,
+        )
+        .unwrap_err();
+        assert_unknown_field_error(err);
+    }
+
+    #[test]
+    fn rejects_unknown_source_entry_keys_in_toml() {
+        let err = toml::from_str::<RawConfig>(
+            r#"
+            [blocks.demo]
+            source = [{ path = "~/.demo" }]
             "#,
         )
         .unwrap_err();

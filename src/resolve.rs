@@ -12,7 +12,9 @@ use std::borrow::Cow;
 
 use indexmap::IndexMap;
 
-use crate::config::{BlockConfig, Config, EnvValue, PathSpec, RawConfig, ShellOverride};
+use crate::config::{
+    BlockConfig, Config, EnvValue, PathSpec, RawConfig, ShellOverride, SourceEntry,
+};
 use crate::error::ConchError;
 use crate::graph::build_graph;
 use crate::ir::{Action, Block, PathOp, ResolvedIr};
@@ -25,6 +27,7 @@ pub struct BlockReport {
     pub requires: Vec<String>,
     pub guarded: bool,
     pub action_count: usize,
+    pub source_count: usize,
     pub source_line_count: usize,
 }
 
@@ -128,6 +131,7 @@ fn build_blocks_and_reports(
             requires: block_cfg.requires.clone(),
             guarded: !(block_cfg.when.is_empty() && block_cfg.requires.is_empty()),
             action_count: actions.len(),
+            source_count: effective.source.len(),
             source_line_count: effective.source_lines.len(),
         });
 
@@ -282,6 +286,7 @@ fn effective_actions(effective: &EffectiveBlock) -> Vec<Action> {
             .map(PathOp::MoveBack)
             .map(Action::Path),
     );
+    actions.extend(effective.source.iter().cloned().map(Action::Source));
     if !effective.source_lines.is_empty() {
         actions.push(Action::SourceLines {
             lines: effective.source_lines.clone(),
@@ -331,6 +336,7 @@ struct EffectiveBlock {
     env: IndexMap<String, EnvValue>,
     alias: IndexMap<String, String>,
     path: PathSpec,
+    source: Vec<SourceEntry>,
     source_lines: Vec<String>,
 }
 
@@ -339,6 +345,7 @@ fn block_for_shell(block: &BlockConfig, shell: &str) -> EffectiveBlock {
         env: block.env.clone(),
         alias: block.alias.clone(),
         path: block.path.clone(),
+        source: block.source.clone(),
         ..Default::default()
     };
 
@@ -372,6 +379,7 @@ fn merge_override(effective: &mut EffectiveBlock, override_cfg: &ShellOverride) 
         .path
         .move_back
         .extend(override_cfg.path.move_back.clone());
+    effective.source.extend(override_cfg.source.iter().cloned());
     effective
         .source_lines
         .extend(override_cfg.source_lines.iter().cloned());
@@ -382,7 +390,9 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
-    use crate::config::{BlockConfigToml, RawConfig, ShellOverridesToml};
+    use crate::config::{
+        BlockConfigToml, RawConfig, ShellOverridesToml, SourceEntryFieldsToml, SourceEntryToml,
+    };
 
     fn sample_block() -> BlockConfigToml {
         BlockConfigToml::default()
@@ -563,13 +573,21 @@ mod tests {
     }
 
     #[test]
-    fn merges_source_lines_for_target_shell() {
+    fn merges_structured_source_and_source_lines_for_target_shell() {
         let mut starship = sample_block();
         starship.when.push("interactive".into());
         starship.requires.push("command:starship".into());
+        starship
+            .source
+            .push(SourceEntryToml::File("~/.base".into()));
+        let shell_command = SourceEntryToml::Structured(SourceEntryFieldsToml {
+            file: None,
+            command: Some(vec!["starship".into(), "init".into(), "{shell}".into()]),
+        });
         starship.shell.insert(
             "fish".into(),
             ShellOverridesToml {
+                source: vec![shell_command.clone()],
                 source_lines: vec!["starship init fish | source".into()],
                 ..Default::default()
             },
@@ -577,6 +595,7 @@ mod tests {
         starship.shell.insert(
             "bash".into(),
             ShellOverridesToml {
+                source: vec![shell_command],
                 source_lines: vec!["eval \"$(starship init bash)\"".into()],
                 ..Default::default()
             },
@@ -588,20 +607,23 @@ mod tests {
         };
 
         let fish = resolve(&raw, "fish").unwrap();
-        assert_eq!(fish.blocks[0].actions.len(), 1);
+        assert_eq!(fish.blocks[0].actions.len(), 3);
         assert_eq!(
             fish.blocks[0].actions[0],
+            Action::Source(SourceEntry::File("~/.base".into()))
+        );
+        assert_eq!(
+            fish.blocks[0].actions[1],
+            Action::Source(SourceEntry::Command(vec![
+                "starship".into(),
+                "init".into(),
+                "{shell}".into(),
+            ]))
+        );
+        assert_eq!(
+            fish.blocks[0].actions[2],
             Action::SourceLines {
                 lines: vec!["starship init fish | source".into()],
-            }
-        );
-
-        let bash = resolve(&raw, "bash").unwrap();
-        assert_eq!(bash.blocks[0].actions.len(), 1);
-        assert_eq!(
-            bash.blocks[0].actions[0],
-            Action::SourceLines {
-                lines: vec!["eval \"$(starship init bash)\"".into()],
             }
         );
 
@@ -611,7 +633,8 @@ mod tests {
             .iter()
             .find(|r| r.block_id == "starship")
             .unwrap();
+        assert_eq!(report.source_count, 2);
         assert_eq!(report.source_line_count, 1);
-        assert_eq!(report.action_count, 1);
+        assert_eq!(report.action_count, 3);
     }
 }

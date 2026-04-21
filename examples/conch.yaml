@@ -1,5 +1,5 @@
 # Demonstrates conch v1 features: predicates, ordering, env (including raw tables),
-# structured PATH, aliases, and shell-specific overrides with source_lines.
+# structured PATH, aliases, structured source, and shell-specific overrides.
 
 blocks:
   core:
@@ -104,13 +104,11 @@ blocks:
       - command:starship
     after:
       - core
-    shell:
-      fish:
-        source_lines:
-          - starship init fish | source
-      bash:
-        source_lines:
-          - eval "$(starship init bash)"
+    source:
+      - command:
+          - starship
+          - init
+          - "{shell}"
 
   zoxide:
     when:
@@ -119,13 +117,11 @@ blocks:
       - command:zoxide
     after:
       - core
-    shell:
-      fish:
-        source_lines:
-          - zoxide init fish | source
-      bash:
-        source_lines:
-          - eval "$(zoxide init bash)"
+    source:
+      - command:
+          - zoxide
+          - init
+          - "{shell}"
 
   direnv:
     when:
@@ -134,13 +130,11 @@ blocks:
       - command:direnv
     after:
       - core
-    shell:
-      fish:
-        source_lines:
-          - direnv hook fish | source
-      bash:
-        source_lines:
-          - eval "$(direnv hook bash)"
+    source:
+      - command:
+          - direnv
+          - hook
+          - "{shell}"
 
   fzf:
     when:
@@ -150,13 +144,10 @@ blocks:
       - "!command:tv"
     after:
       - core
-    shell:
-      fish:
-        source_lines:
-          - fzf --fish | source
-      bash:
-        source_lines:
-          - eval "$(fzf --bash)"
+    source:
+      - command:
+          - fzf
+          - "--{shell}"
 
   tv:
     when:
@@ -165,13 +156,11 @@ blocks:
       - command:tv
     after:
       - fzf
-    shell:
-      fish:
-        source_lines:
-          - tv init fish | source
-      bash:
-        source_lines:
-          - eval "$(tv init bash)"
+    source:
+      - command:
+          - tv
+          - init
+          - "{shell}"
 
   stow-hint:
     when:

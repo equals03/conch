@@ -35,6 +35,7 @@ fn env_value_reject_float<E: de::Error>(value: f64) -> Result<EnvValue, E> {
 
 pub use raw::{
     BlockConfigToml, InitConfigToml, InitGuardToml, PathSpecToml, RawConfig, ShellOverridesToml,
+    SourceEntryFieldsToml, SourceEntryToml,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +188,12 @@ impl<'de> Deserialize<'de> for EnvValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceEntry {
+    File(String),
+    Command(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub init: InitConfig,
     pub blocks: IndexMap<String, BlockConfig>,
@@ -211,6 +218,7 @@ pub struct BlockConfig {
     pub env: IndexMap<String, EnvValue>,
     pub alias: IndexMap<String, String>,
     pub path: PathSpec,
+    pub source: Vec<SourceEntry>,
     pub shell: IndexMap<String, ShellOverride>,
 }
 
@@ -219,6 +227,7 @@ pub struct ShellOverride {
     pub env: IndexMap<String, EnvValue>,
     pub alias: IndexMap<String, String>,
     pub path: PathSpec,
+    pub source: Vec<SourceEntry>,
     pub source_lines: Vec<String>,
 }
 
@@ -243,7 +252,10 @@ impl TryFrom<&RawConfig> for Config {
         let mut blocks = IndexMap::new();
         for (block_id, block) in &raw.blocks {
             validate_block_id(block_id)?;
-            blocks.insert(block_id.clone(), block.clone().into());
+            blocks.insert(
+                block_id.clone(),
+                block_config_from_toml(block_id, block.clone())?,
+            );
         }
 
         let config = Self {
@@ -267,6 +279,109 @@ fn validate_block_id(block_id: &str) -> Result<(), ConchError> {
     }
 
     Ok(())
+}
+
+fn block_config_from_toml(
+    block_id: &str,
+    value: BlockConfigToml,
+) -> Result<BlockConfig, ConchError> {
+    Ok(BlockConfig {
+        when: value.when,
+        requires: value.requires,
+        before: value.before,
+        after: value.after,
+        env: value.env,
+        alias: value.alias,
+        path: value.path.into(),
+        source: convert_source_entries(value.source, &format!("block `{block_id}`"))?,
+        shell: value
+            .shell
+            .into_iter()
+            .map(|(shell, override_cfg)| {
+                let shell_override = shell_override_from_toml(block_id, &shell, override_cfg)?;
+                Ok::<_, ConchError>((shell, shell_override))
+            })
+            .collect::<Result<IndexMap<_, _>, _>>()?,
+    })
+}
+
+fn shell_override_from_toml(
+    block_id: &str,
+    shell: &str,
+    value: ShellOverridesToml,
+) -> Result<ShellOverride, ConchError> {
+    Ok(ShellOverride {
+        env: value.env,
+        alias: value.alias,
+        path: value.path.into(),
+        source: convert_source_entries(
+            value.source,
+            &format!("block `{block_id}` shell override `{shell}`"),
+        )?,
+        source_lines: value.source_lines,
+    })
+}
+
+fn convert_source_entries(
+    entries: Vec<SourceEntryToml>,
+    scope: &str,
+) -> Result<Vec<SourceEntry>, ConchError> {
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| source_entry_from_toml(entry, scope, index + 1))
+        .collect()
+}
+
+fn source_entry_from_toml(
+    entry: SourceEntryToml,
+    scope: &str,
+    position: usize,
+) -> Result<SourceEntry, ConchError> {
+    match entry {
+        SourceEntryToml::File(path) => validate_source_file(path, scope, position),
+        SourceEntryToml::Structured(fields) => match (fields.file, fields.command) {
+            (Some(path), None) => validate_source_file(path, scope, position),
+            (None, Some(command)) => validate_source_command(command, scope, position),
+            (Some(_), Some(_)) => Err(ConchError::Validation(format!(
+                "{scope} source entry #{position} must set exactly one of `file` or `command`"
+            ))),
+            (None, None) => Err(ConchError::Validation(format!(
+                "{scope} source entry #{position} must set one of `file` or `command`"
+            ))),
+        },
+    }
+}
+
+fn validate_source_file(
+    path: String,
+    scope: &str,
+    position: usize,
+) -> Result<SourceEntry, ConchError> {
+    if path.trim().is_empty() {
+        return Err(ConchError::Validation(format!(
+            "{scope} source entry #{position} file path must not be empty"
+        )));
+    }
+    Ok(SourceEntry::File(path))
+}
+
+fn validate_source_command(
+    command: Vec<String>,
+    scope: &str,
+    position: usize,
+) -> Result<SourceEntry, ConchError> {
+    if command.is_empty() {
+        return Err(ConchError::Validation(format!(
+            "{scope} source entry #{position} command must not be empty"
+        )));
+    }
+    if command[0].trim().is_empty() {
+        return Err(ConchError::Validation(format!(
+            "{scope} source entry #{position} command name must not be empty"
+        )));
+    }
+    Ok(SourceEntry::Command(command))
 }
 
 fn validate_init_guard_reserved_env_keys(config: &Config) -> Result<(), ConchError> {
@@ -327,36 +442,6 @@ impl From<InitGuardToml> for InitGuardConfig {
     }
 }
 
-impl From<BlockConfigToml> for BlockConfig {
-    fn from(value: BlockConfigToml) -> Self {
-        Self {
-            when: value.when,
-            requires: value.requires,
-            before: value.before,
-            after: value.after,
-            env: value.env,
-            alias: value.alias,
-            path: value.path.into(),
-            shell: value
-                .shell
-                .into_iter()
-                .map(|(shell, override_cfg)| (shell, override_cfg.into()))
-                .collect(),
-        }
-    }
-}
-
-impl From<ShellOverridesToml> for ShellOverride {
-    fn from(value: ShellOverridesToml) -> Self {
-        Self {
-            env: value.env,
-            alias: value.alias,
-            path: value.path.into(),
-            source_lines: value.source_lines,
-        }
-    }
-}
-
 impl From<PathSpecToml> for PathSpec {
     fn from(value: PathSpecToml) -> Self {
         Self {
@@ -406,6 +491,36 @@ mod tests {
         assert_eq!(nvim.env["RETRIES"], EnvValue::from(3_i64));
         assert_eq!(nvim.alias["vim"], "nvim");
         assert_eq!(nvim.path.prepend, vec!["~/.local/bin"]);
+    }
+
+    #[test]
+    fn converts_structured_source_entries() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.baile]
+            source = ["~/.baile-env", { command = ["starship", "init", "{shell}"] }]
+
+            [blocks.baile.shell.fish]
+            source = [{ file = "~/.config/fish/local.fish" }]
+            source_lines = ["echo sourced"]
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::try_from(&raw).unwrap();
+        let baile = &config.blocks["baile"];
+        assert_eq!(
+            baile.source,
+            vec![
+                SourceEntry::File("~/.baile-env".into()),
+                SourceEntry::Command(vec!["starship".into(), "init".into(), "{shell}".into(),]),
+            ]
+        );
+        assert_eq!(
+            baile.shell["fish"].source,
+            vec![SourceEntry::File("~/.config/fish/local.fish".into())]
+        );
+        assert_eq!(baile.shell["fish"].source_lines, vec!["echo sourced"]);
     }
 
     #[test]
@@ -504,5 +619,67 @@ mod tests {
         assert!(err
             .to_string()
             .contains("reserved env key `__CONCH_FISH_SOURCED`"));
+    }
+
+    #[test]
+    fn rejects_source_entries_that_set_both_file_and_command() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo]
+            source = [{ file = "~/.demo", command = ["echo", "demo"] }]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err
+            .to_string()
+            .contains("must set exactly one of `file` or `command`"));
+    }
+
+    #[test]
+    fn rejects_empty_source_commands() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo]
+            source = [{ command = [] }]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err.to_string().contains("command must not be empty"));
+    }
+
+    #[test]
+    fn rejects_empty_source_file_paths() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo]
+            source = [""]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err.to_string().contains("file path must not be empty"));
+    }
+
+    #[test]
+    fn rejects_empty_source_command_names() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo]
+            source = [{ command = ["", "init"] }]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        assert!(matches!(err, ConchError::Validation(_)));
+        assert!(err.to_string().contains("command name must not be empty"));
     }
 }

@@ -5,11 +5,12 @@
 //! - uses `fish_add_path` for path mutations
 //! - supports precise `move_front` / `move_back` via `fish_add_path --move`
 
-use crate::config::EnvValue;
+use crate::config::{EnvValue, SourceEntry};
 use crate::ir::{Action, PathOp, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
 use crate::provider::{
-    build_hoist_runs, push_indented_verbatim, HoistRun, HoistedBlock, ShellProvider,
+    build_hoist_runs, push_indented_verbatim, source_command_for_shell, HoistRun, HoistedBlock,
+    ShellProvider,
 };
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -190,11 +191,38 @@ fn render_action(out: &mut String, action: &Action, prefix: &str) {
                 ));
             }
         },
+        Action::Source(source) => match source {
+            SourceEntry::File(path) => {
+                out.push_str(prefix);
+                out.push_str(&format!("source {}\n", shell_path(path)));
+            }
+            SourceEntry::Command(command) => {
+                let rendered = render_source_command(command);
+                out.push_str(prefix);
+                out.push_str(&format!("{rendered} | source\n"));
+            }
+        },
         Action::SourceLines { lines } => {
             for entry in lines {
                 push_indented_verbatim(out, entry, prefix);
             }
         }
+    }
+}
+
+fn render_source_command(command: &[String]) -> String {
+    source_command_for_shell(command, "fish")
+        .iter()
+        .map(|part| fish_command_arg(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn fish_command_arg(value: &str) -> String {
+    if value == "~" || value.starts_with("~/") {
+        fish_path(&super::normalise_home(value))
+    } else {
+        fish_string(value)
     }
 }
 
@@ -234,7 +262,7 @@ fn shell_path(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EnvValue;
+    use crate::config::{EnvValue, SourceEntry};
     use crate::ir::{Action, Block, PathOp, ResolvedIr};
     use crate::predicate::{Predicate, PredicateAtom};
 
@@ -358,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_source_lines_inside_guards() {
+    fn renders_structured_source_actions_inside_guards() {
         let ir = ResolvedIr {
             blocks: vec![Block {
                 block_id: "starship".into(),
@@ -370,9 +398,22 @@ mod tests {
                     negated: false,
                     atom: PredicateAtom::Command("starship".into()),
                 }],
-                actions: vec![Action::SourceLines {
-                    lines: vec!["starship init fish | source".into()],
-                }],
+                actions: vec![
+                    Action::Source(SourceEntry::File("~/.config/fish/local.fish".into())),
+                    Action::Source(SourceEntry::Command(vec![
+                        "starship".into(),
+                        "init".into(),
+                        "{shell}".into(),
+                    ])),
+                    Action::Source(SourceEntry::Command(vec![
+                        "tool".into(),
+                        "--config".into(),
+                        "~/.config/tool/config.toml".into(),
+                    ])),
+                    Action::SourceLines {
+                        lines: vec!["starship init fish | source".into()],
+                    },
+                ],
             }],
         };
 
@@ -380,6 +421,9 @@ mod tests {
         assert!(text.contains(
             "if status is-interactive\n\n    # block: starship\n    if command -q -- \"starship\"",
         ));
+        assert!(text.contains("source \"$HOME/.config/fish/local.fish\""));
+        assert!(text.contains("\"starship\" \"init\" \"fish\" | source"));
+        assert!(text.contains("\"tool\" \"--config\" \"$HOME/.config/tool/config.toml\" | source"));
         assert!(text.contains("starship init fish | source"));
     }
 

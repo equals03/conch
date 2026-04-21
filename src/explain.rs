@@ -157,6 +157,20 @@ fn block_contributions(resolution: &Resolution) -> HashMap<String, Vec<String>> 
     }
 
     for report in &resolution.block_reports {
+        if report.source_count > 0 {
+            contributions
+                .entry(report.block_id.clone())
+                .or_default()
+                .push(format!(
+                    "source {} structured {}",
+                    report.source_count,
+                    if report.source_count == 1 {
+                        "entry"
+                    } else {
+                        "entries"
+                    }
+                ));
+        }
         if report.source_line_count > 0 {
             contributions
                 .entry(report.block_id.clone())
@@ -260,7 +274,10 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
-    use crate::config::{BlockConfigToml, EnvValue, RawConfig, ShellOverridesToml};
+    use crate::config::{
+        BlockConfigToml, EnvValue, RawConfig, ShellOverridesToml, SourceEntryFieldsToml,
+        SourceEntryToml,
+    };
     use crate::resolve::resolve_with_details;
 
     #[test]
@@ -297,12 +314,19 @@ mod tests {
     }
 
     #[test]
-    fn includes_source_line_counts_in_block_contributions() {
+    fn includes_source_counts_in_block_contributions() {
         let mut starship = BlockConfigToml::default();
         starship.when.push("interactive".into());
+        starship
+            .source
+            .push(SourceEntryToml::File("~/.base".into()));
         starship.shell.insert(
             "fish".into(),
             ShellOverridesToml {
+                source: vec![SourceEntryToml::Structured(SourceEntryFieldsToml {
+                    file: None,
+                    command: Some(vec!["starship".into(), "init".into(), "{shell}".into()]),
+                })],
                 source_lines: vec!["starship init fish | source".into()],
                 ..Default::default()
             },
@@ -317,7 +341,7 @@ mod tests {
         let text = render_resolution(&resolution, RenderOptions::default());
 
         assert!(text.contains("starship  guarded"));
-        assert!(text.contains("contributes source 1 verbatim line"));
+        assert!(text.contains("contributes source 2 structured entries, source 1 verbatim line"));
     }
 
     #[test]

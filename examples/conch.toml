@@ -1,5 +1,5 @@
 # Demonstrates conch v1 features: predicates, ordering, env (including `{ raw = "..." }`),
-# structured PATH, aliases, and shell-specific overrides with `source_lines`.
+# structured PATH, aliases, structured `source`, and shell-specific overrides.
 # Predicates are shell-time guards; `conch check` does not evaluate them on the host.
 
 [blocks.core]
@@ -85,57 +85,32 @@ ls = "eza --group-directories-first"
 when = ["interactive"]
 requires = ["command:starship"]
 after = ["core"]
-
-[blocks.starship.shell.fish]
-source_lines = ["starship init fish | source"]
-
-[blocks.starship.shell.bash]
-source_lines = ['eval "$(starship init bash)"']
+source = [{ command = ["starship", "init", "{shell}"] }]
 
 [blocks.zoxide]
 when = ["interactive"]
 requires = ["command:zoxide"]
 after = ["core"]
-
-[blocks.zoxide.shell.fish]
-source_lines = ["zoxide init fish | source"]
-
-[blocks.zoxide.shell.bash]
-source_lines = ['eval "$(zoxide init bash)"']
+source = [{ command = ["zoxide", "init", "{shell}"] }]
 
 [blocks.direnv]
 when = ["interactive"]
 requires = ["command:direnv"]
 after = ["core"]
-
-[blocks.direnv.shell.fish]
-source_lines = ["direnv hook fish | source"]
-
-[blocks.direnv.shell.bash]
-source_lines = ['eval "$(direnv hook bash)"']
+source = [{ command = ["direnv", "hook", "{shell}"] }]
 
 # `fzf` and `tv` are common fuzzy-picker tools; this mirrors a typical mutual exclusion.
 [blocks.fzf]
 when = ["interactive"]
 requires = ["command:fzf", "!command:tv"]
 after = ["core"]
-
-[blocks.fzf.shell.fish]
-source_lines = ["fzf --fish | source"]
-
-[blocks.fzf.shell.bash]
-source_lines = ['eval "$(fzf --bash)"']
+source = [{ command = ["fzf", "--{shell}"] }]
 
 [blocks.tv]
 when = ["interactive"]
 requires = ["command:tv"]
 after = ["fzf"]
-
-[blocks.tv.shell.fish]
-source_lines = ["tv init fish | source"]
-
-[blocks.tv.shell.bash]
-source_lines = ['eval "$(tv init bash)"']
+source = [{ command = ["tv", "init", "{shell}"] }]
 
 [blocks.stow-hint]
 when = ["interactive"]

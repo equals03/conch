@@ -19,6 +19,7 @@ Providers own only:
 - top-level init guard rendering for a specific shell (for example shell-specific sourced variables)
 - shell-specific tradeoff documentation
 - safe provider-side guard shaping such as hoisting adjacent shared `interactive` / `login` checks without changing app order
+- structured rendering of `Source` actions (source a file or source command output)
 - verbatim emission of `SourceLines` actions (conch does not validate shell syntax; authors use `when` / `requires` like any other app block)
 
 ## Current providers

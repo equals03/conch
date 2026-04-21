@@ -52,7 +52,7 @@ The core knows about:
 
 - ordering
 - predicates as syntax trees
-- env/alias/path actions
+- env/alias/path/source actions
 - conservative conflict rules
 
 The core does **not** know Fish/Bash syntax.

@@ -4,7 +4,7 @@
 //! and actions. Providers translate those guards and actions into shell-native
 //! syntax; they must not reinterpret ordering or conflict rules.
 
-use crate::config::EnvValue;
+use crate::config::{EnvValue, SourceEntry};
 use crate::predicate::Predicate;
 
 /// A single PATH mutation in evaluation order.
@@ -28,6 +28,7 @@ pub enum Action {
         value: String,
     },
     Path(PathOp),
+    Source(SourceEntry),
     /// Literal lines to emit verbatim after structured actions (from shell overrides).
     SourceLines {
         lines: Vec<String>,

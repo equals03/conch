@@ -5,11 +5,12 @@
 //! - path `move_front` / `move_back` are approximated in v1 as prepend/append
 //! - approximation is documented directly in generated output comments
 
-use crate::config::EnvValue;
+use crate::config::{EnvValue, SourceEntry};
 use crate::ir::{Action, PathOp, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
 use crate::provider::{
-    build_hoist_runs, push_indented_verbatim, HoistRun, HoistedBlock, ShellProvider,
+    build_hoist_runs, push_indented_verbatim, source_command_for_shell, HoistRun, HoistedBlock,
+    ShellProvider,
 };
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -189,11 +190,38 @@ fn render_action(out: &mut String, action: &Action, prefix: &str) {
                 out.push_str(&format!("export PATH=\"$PATH\":{}\n", shell_path(path)));
             }
         },
+        Action::Source(source) => match source {
+            SourceEntry::File(path) => {
+                out.push_str(prefix);
+                out.push_str(&format!("source {}\n", shell_path(path)));
+            }
+            SourceEntry::Command(command) => {
+                let rendered = render_source_command(command);
+                out.push_str(prefix);
+                out.push_str(&format!("eval \"$({rendered})\"\n"));
+            }
+        },
         Action::SourceLines { lines } => {
             for entry in lines {
                 push_indented_verbatim(out, entry, prefix);
             }
         }
+    }
+}
+
+fn render_source_command(command: &[String]) -> String {
+    source_command_for_shell(command, "bash")
+        .iter()
+        .map(|part| bash_command_arg(part))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn bash_command_arg(value: &str) -> String {
+    if value == "~" || value.starts_with("~/") {
+        bash_path_quote(&super::normalise_home(value))
+    } else {
+        bash_single_quote(value)
     }
 }
 
@@ -239,7 +267,7 @@ fn bash_path_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EnvValue;
+    use crate::config::{EnvValue, SourceEntry};
     use crate::ir::{Action, Block, PathOp, ResolvedIr};
     use crate::predicate::{Predicate, PredicateAtom};
 
@@ -413,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_source_lines_inside_guards() {
+    fn renders_structured_source_actions_inside_guards() {
         let ir = ResolvedIr {
             blocks: vec![Block {
                 block_id: "starship".into(),
@@ -425,14 +453,30 @@ mod tests {
                     negated: false,
                     atom: PredicateAtom::Command("starship".into()),
                 }],
-                actions: vec![Action::SourceLines {
-                    lines: vec!["eval \"$(starship init bash)\"".into()],
-                }],
+                actions: vec![
+                    Action::Source(SourceEntry::File("~/.bash/local.bash".into())),
+                    Action::Source(SourceEntry::Command(vec![
+                        "starship".into(),
+                        "init".into(),
+                        "{shell}".into(),
+                    ])),
+                    Action::Source(SourceEntry::Command(vec![
+                        "tool".into(),
+                        "--config".into(),
+                        "~/.config/tool/config.toml".into(),
+                    ])),
+                    Action::SourceLines {
+                        lines: vec!["eval \"$(starship init bash)\"".into()],
+                    },
+                ],
             }],
         };
 
         let text = BashProvider.render(&ir);
         assert!(text.contains("if [[ $- == *i* ]]; then\n\n    # block: starship\n    if command -v -- 'starship' >/dev/null 2>&1; then"));
+        assert!(text.contains("source \"$HOME/.bash/local.bash\""));
+        assert!(text.contains("eval \"$('starship' 'init' 'bash')\""));
+        assert!(text.contains("'tool' '--config' \"$HOME/.config/tool/config.toml\""));
         assert!(text.contains("eval \"$(starship init bash)\""));
     }
 
