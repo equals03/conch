@@ -25,13 +25,7 @@ pub fn render_resolution(resolution: &Resolution, options: RenderOptions) -> Str
     };
     let contributions = block_contributions(resolution);
 
-    writeln!(
-        out,
-        "{} {}",
-        style.bold("conch explain"),
-        style.cyan(shell)
-    )
-    .unwrap();
+    writeln!(out, "{} {}", style.bold("conch explain"), style.cyan(shell)).unwrap();
     out.push('\n');
 
     render_section_title(&mut out, &style, "Block order");

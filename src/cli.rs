@@ -1,5 +1,6 @@
 //! CLI entry (`check`, `init`, `explain`, `complete`).
 
+use std::env;
 use std::fs;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -25,27 +26,27 @@ pub struct Cli {
 pub enum Command {
     /// Parse config, validate schema, and report graph/conflict errors.
     Check {
-        /// Path to config file (.toml, .yaml, .yml, or .json)
-        #[arg(long, default_value = "conch.toml")]
-        config: PathBuf,
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Target shell to validate. If omitted, conch validates both fish and bash.
         #[arg(value_enum)]
         shell: Option<ShellKind>,
     },
     /// Generate shell-native init output and print it to stdout.
     Init {
-        /// Path to config file (.toml, .yaml, .yml, or .json)
-        #[arg(long, default_value = "conch.toml")]
-        config: PathBuf,
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Target shell to generate init output for.
         #[arg(value_enum)]
         shell: ShellKind,
     },
     /// Explain ordered blocks, guards, and write ordering for a target shell.
     Explain {
-        /// Path to config file (.toml, .yaml, .yml, or .json)
-        #[arg(long, default_value = "conch.toml")]
-        config: PathBuf,
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Target shell to explain.
         #[arg(value_enum)]
         shell: ShellKind,
@@ -93,6 +94,10 @@ impl ColorMode {
     }
 }
 
+const CONFIG_EXTENSIONS: [&str; 4] = ["toml", "yaml", "yml", "json"];
+const CONFIG_SEARCH_STEMS: [&str; 2] = ["conch", "conch/config"];
+const XDG_DEFAULT_CONFIG_DIRS: &str = "/etc/xdg";
+
 #[derive(Copy, Clone, Debug)]
 enum ConfigFormat {
     Toml,
@@ -131,7 +136,7 @@ pub fn run() -> Result<(), ConchError> {
     let cli = Cli::parse();
     match cli.command {
         Command::Check { config, shell } => {
-            let raw = load_config(&config)?;
+            let raw = load_selected_config(config)?;
             match shell {
                 Some(shell) => {
                     resolve(&raw, shell.as_str())?;
@@ -145,7 +150,7 @@ pub fn run() -> Result<(), ConchError> {
             Ok(())
         }
         Command::Init { config, shell } => {
-            let raw = load_config(&config)?;
+            let raw = load_selected_config(config)?;
             let ir = resolve(&raw, shell.as_str())?;
             let text = match shell {
                 ShellKind::Fish => FishProvider.render(&ir),
@@ -159,7 +164,7 @@ pub fn run() -> Result<(), ConchError> {
             shell,
             color,
         } => {
-            let raw = load_config(&config)?;
+            let raw = load_selected_config(config)?;
             let resolution = resolve_with_details(&raw, shell.as_str())?;
             let text = render_resolution(
                 &resolution,
@@ -177,6 +182,94 @@ pub fn run() -> Result<(), ConchError> {
             Ok(())
         }
     }
+}
+
+fn load_selected_config(path: Option<PathBuf>) -> Result<RawConfig, ConchError> {
+    let path = match path {
+        Some(path) => path,
+        None => resolve_default_config_path()?,
+    };
+    load_config(&path)
+}
+
+fn resolve_default_config_path() -> Result<PathBuf, ConchError> {
+    let mut candidates = Vec::new();
+    for root in xdg_config_roots()? {
+        candidates.extend(config_candidates_in_root(&root));
+    }
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned()
+        .ok_or_else(|| {
+            ConchError::DefaultConfigNotFound(format_default_config_candidates(&candidates))
+        })
+}
+
+fn xdg_config_roots() -> Result<Vec<PathBuf>, ConchError> {
+    let mut roots = vec![xdg_config_home()?];
+    roots.extend(xdg_config_dirs());
+    Ok(roots)
+}
+
+fn xdg_config_home() -> Result<PathBuf, ConchError> {
+    if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
+        if path.is_empty() {
+            return Err(ConchError::Validation(
+                "XDG_CONFIG_HOME must not be empty when set".into(),
+            ));
+        }
+        let path = PathBuf::from(path);
+        if !path.is_absolute() {
+            return Err(ConchError::Validation(
+                "XDG_CONFIG_HOME must be an absolute path".into(),
+            ));
+        }
+        return Ok(path);
+    }
+
+    match env::var_os("HOME") {
+        Some(home) if !home.is_empty() => Ok(PathBuf::from(home).join(".config")),
+        _ => Err(ConchError::Validation(
+            "could not resolve XDG config home; set XDG_CONFIG_HOME or HOME".into(),
+        )),
+    }
+}
+
+fn xdg_config_dirs() -> Vec<PathBuf> {
+    let Some(paths) = env::var_os("XDG_CONFIG_DIRS") else {
+        return vec![PathBuf::from(XDG_DEFAULT_CONFIG_DIRS)];
+    };
+    if paths.is_empty() {
+        return vec![PathBuf::from(XDG_DEFAULT_CONFIG_DIRS)];
+    }
+
+    let dirs: Vec<PathBuf> = env::split_paths(&paths)
+        .filter(|path| path.is_absolute())
+        .collect();
+    if dirs.is_empty() {
+        vec![PathBuf::from(XDG_DEFAULT_CONFIG_DIRS)]
+    } else {
+        dirs
+    }
+}
+
+fn config_candidates_in_root(root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for stem in CONFIG_SEARCH_STEMS {
+        for extension in CONFIG_EXTENSIONS {
+            candidates.push(root.join(format!("{stem}.{extension}")));
+        }
+    }
+    candidates
+}
+
+fn format_default_config_candidates(candidates: &[PathBuf]) -> String {
+    candidates
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn load_config(path: &Path) -> Result<RawConfig, ConchError> {

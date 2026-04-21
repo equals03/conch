@@ -44,6 +44,14 @@ At a high level it:
 
 The repository ships the **same** illustrative config as [`examples/conch.toml`](./examples/conch.toml), [`examples/conch.yaml`](./examples/conch.yaml), and [`examples/conch.json`](./examples/conch.json). Start from whichever serialisation you prefer.
 
+If `--config` is omitted, `conch` searches XDG config locations in this order:
+
+1. `${XDG_CONFIG_HOME}/conch.{toml,yaml,yml,json}`
+2. `${XDG_CONFIG_HOME}/conch/config.{toml,yaml,yml,json}`
+3. each directory in `${XDG_CONFIG_DIRS}` (default `/etc/xdg`) using the same two layouts
+
+If `XDG_CONFIG_HOME` is unset, `conch` falls back to `~/.config`.
+
 Minimal shape (see the files for the full tour):
 
 ```toml
@@ -94,13 +102,13 @@ If you prefer to run `conch` on each login so the shell always loads freshly com
 **Fish** — in `~/.config/fish/config.fish`:
 
 ```fish
-conch init fish --config ~/.config/conch/conch.toml | source
+conch init fish | source
 ```
 
 **Bash** — in `~/.bashrc`:
 
 ```bash
-eval "$(conch init bash --config ~/.config/conch/conch.toml)"
+eval "$(conch init bash)"
 ```
 
 Keep `conch` on `PATH`, and ensure anything besides the script goes to stderr so the streamed output stays valid shell.
@@ -138,6 +146,8 @@ Optional: this repo includes a Nix flake with a `devShell` (`nix develop`) for a
 
 ### `check` — validate config
 
+`--config` is optional when your config lives in a discovered XDG location. The examples below pass `--config` to point at the bundled example files.
+
 ```bash
 conch check --config examples/conch.toml
 conch check --config examples/conch.yaml
@@ -157,6 +167,9 @@ Static validation only:
 ### `init` — emit shell
 
 ```bash
+conch init fish
+conch init bash
+# or point at a specific file:
 conch init fish --config examples/conch.toml
 conch init bash --config examples/conch.json
 ```
@@ -169,6 +182,9 @@ Predicates become shell-native guards, for example:
 ### `explain` — inspect resolution
 
 ```bash
+conch explain fish
+conch explain bash
+# or point at a specific file:
 conch explain fish --config examples/conch.toml
 conch explain bash --config examples/conch.json
 conch explain fish --color never --config examples/conch.yaml
@@ -319,6 +335,7 @@ end
 
 | Message | What to do |
 | ------- | ---------- |
+| `default config file not found; searched XDG config locations: ...` | Create a config at one of the listed paths, or pass `--config` explicitly. Ensure `HOME` / `XDG_CONFIG_HOME` resolve as you expect. |
 | `merge conflict: ... does not order them` | Two blocks write the same env/alias key without a graph relationship. Add `before` / `after`. |
 | `invalid graph: cycle detected ...` | Remove or change a `before` / `after` edge. |
 | `invalid predicate: ...` | Fix predicate syntax; see [`docs/predicate-reference.md`](./docs/predicate-reference.md). |

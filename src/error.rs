@@ -31,4 +31,7 @@ pub enum ConchError {
 
     #[error("config file not found: {0}")]
     ConfigNotFound(PathBuf),
+
+    #[error("default config file not found; searched XDG config locations: {0}")]
+    DefaultConfigNotFound(String),
 }

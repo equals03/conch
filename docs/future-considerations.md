@@ -15,13 +15,16 @@ Not needed for the core compiler semantics.
 
 ### Config search conventions
 
+Current behaviour when `--config` is omitted:
+
+- `${XDG_CONFIG_HOME}/conch.{toml,yaml,yml,json}`
+- `${XDG_CONFIG_HOME}/conch/config.{toml,yaml,yml,json}`
+- each directory in `${XDG_CONFIG_DIRS}` (default `/etc/xdg`) using the same two layouts
+
 Possible future behaviour:
 
-- current directory `conch.toml`
-- XDG config locations
 - explicit project config conventions
-
-v1 stays explicit with `--config` plus a simple default file name.
+- richer diagnostics for config-discovery failures
 
 ## Config model considerations
 

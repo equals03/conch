@@ -76,10 +76,7 @@ pub fn resolve(raw: &RawConfig, target_shell: &str) -> Result<ResolvedIr, ConchE
     Ok(resolve_with_details(raw, target_shell)?.ir)
 }
 
-pub fn resolve_with_details(
-    raw: &RawConfig,
-    target_shell: &str,
-) -> Result<Resolution, ConchError> {
+pub fn resolve_with_details(raw: &RawConfig, target_shell: &str) -> Result<Resolution, ConchError> {
     let config = Config::try_from(raw)?;
 
     let block_ids: Vec<String> = config.blocks.keys().cloned().collect();
