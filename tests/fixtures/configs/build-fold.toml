@@ -1,0 +1,10 @@
+[init.guard]
+enabled = true
+
+[blocks.demo]
+when = ["interactive", "shell:fish"]
+requires = ["file:Cargo.toml", "dir:src", "env:HOME"]
+source = [{ command = ["starship", "init", "{shell}"] }]
+
+[blocks.demo.alias]
+vim = "nvim"

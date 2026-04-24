@@ -35,7 +35,7 @@ At a high level it:
 - Structured `source` entries for files and command-output sourcing, plus shell-specific tables under `shell.fish` / `shell.bash` for `env`, `alias`, `path`, extra `source`, and verbatim `source_lines`
 - Fish and Bash providers
 - Optional top-level init guard to prevent re-sourcing the same generated shell output
-- `check`, `init`, and `explain` commands
+- `check`, `init`, `build`, and `explain` commands, plus `--explain` on generation/validation commands
 - Deterministic ordering, explicit conflict detection, fixture/golden tests
 
 > [!NOTE]
@@ -73,12 +73,15 @@ Generate and install:
 
 ```bash
 conch init fish --config examples/conch.toml > ~/.config/conch/config.fish
+# or host-bound precomputed output:
+conch build fish --config examples/conch.toml > ~/.config/conch/config.fish
 # or YAML / JSON:
 conch init fish --config examples/conch.yaml > ~/.config/conch/config.fish
 ```
 
 ```bash
 conch init bash --config examples/conch.toml > ~/.config/conch/config.bash
+conch build bash --config examples/conch.toml > ~/.config/conch/config.bash
 conch init bash --config examples/conch.json > ~/.config/conch/config.bash
 ```
 
@@ -196,18 +199,69 @@ enabled = true
 
 When enabled, `init` emits both `__CONCH_SOURCED=1` and a shell-specific flag (`__CONCH_FISH_SOURCED` or `__CONCH_BASH_SOURCED`). Only the shell-specific flag is used as the generated guard condition; the shared flag is available for user scripts or sourced snippets that want to detect that conch ran.
 
+Explain inline instead of emitting shell:
+
+```bash
+conch init fish --explain
+conch init bash --explain --color never
+```
+
+### `build` — emit host-bound folded shell
+
+```bash
+conch build fish
+conch build bash
+# or point at a specific file:
+conch build fish --config examples/conch.toml
+conch build bash --config examples/conch.json
+```
+
+`build` shares `init`'s parsing, ordering, conflict detection, provider rendering, and init-guard behavior, but folds selected predicates at build time on the current machine.
+
+Build-time folded predicates:
+
+- `shell:<name>`
+- `command:<name>`
+- `file:<path>`
+- `dir:<path>`
+- `os:<name>`
+- `hostname:<name>`
+
+Always-runtime predicates:
+
+- `interactive`
+- `login`
+- `env:<name>`
+- `env:<name>=<value>`
+
+Structured `source = [{ command = [...] }]` entries remain runtime shell code in `build`; conch does not execute them while building.
+
+> [!IMPORTANT]
+> `build` output is intentionally host-bound. Run it on the machine where the generated shell will be used.
+
+Explain inline instead of emitting shell:
+
+```bash
+conch build fish --explain
+conch build bash --explain --color never
+```
+
 ### `explain` — inspect resolution
 
 ```bash
 conch explain fish
 conch explain bash
+conch explain fish build
+conch explain bash check
 # or point at a specific file:
 conch explain fish --config examples/conch.toml
-conch explain bash --config examples/conch.json
+conch explain bash build --config examples/conch.json
 conch explain fish --color never --config examples/conch.yaml
 ```
 
-Shows block order, guards (`when` / `requires`), per-block contributions, ordered env/alias writers, and `PATH` operations. It does **not** claim which blocks are active on your machine.
+`conch explain <shell>` keeps current behaviour and defaults to `init` semantics. The optional action may be `init`, `build`, or `check`. `conch <command> ... --explain` is equivalent to the matching `conch explain` form when a shell is specified.
+
+Shows block order, guards (`when` / `requires`), per-block contributions, ordered env/alias writers, and `PATH` operations. In `build` mode it shows the post-folding result for the current machine.
 
 > [!TIP]
 > `--color auto|always|never` controls ANSI output (default: color when stdout is a TTY).
@@ -229,7 +283,7 @@ requires = ["command:nvim"]
 when = ["!env:EDITOR"]
 ```
 
-`conch` parses and validates; providers render guards; the shell evaluates them at source time. See [`docs/predicate-reference.md`](./docs/predicate-reference.md).
+`conch` parses and validates; providers render guards; the shell evaluates them at source time. `conch build` is the exception for host-bound folding of `shell`, `command`, `file`, `dir`, `os`, and `hostname` predicates on the current machine. See [`docs/predicate-reference.md`](./docs/predicate-reference.md).
 
 ### Graph ordering
 

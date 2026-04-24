@@ -9,12 +9,37 @@ use std::fmt::Write;
 use crate::ir::PathOp;
 use crate::resolve::{BindingReport, BlockReport, Resolution};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplainMode {
+    Check,
+    Init,
+    Build,
+}
+
+impl ExplainMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Init => "init",
+            Self::Build => "build",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RenderOptions {
     pub color: bool,
 }
 
 pub fn render_resolution(resolution: &Resolution, options: RenderOptions) -> String {
+    render_resolution_for(resolution, options, ExplainMode::Init)
+}
+
+pub fn render_resolution_for(
+    resolution: &Resolution,
+    options: RenderOptions,
+    mode: ExplainMode,
+) -> String {
     let mut out = String::new();
     let style = Style {
         color: options.color,
@@ -25,7 +50,14 @@ pub fn render_resolution(resolution: &Resolution, options: RenderOptions) -> Str
     };
     let contributions = block_contributions(resolution);
 
-    writeln!(out, "{} {}", style.bold("conch explain"), style.cyan(shell)).unwrap();
+    writeln!(
+        out,
+        "{} {} {}",
+        style.bold("conch explain"),
+        style.cyan(shell),
+        style.dim(mode.as_str())
+    )
+    .unwrap();
     out.push('\n');
 
     render_section_title(&mut out, &style, "Block order");
@@ -300,7 +332,7 @@ mod tests {
         let resolution = resolve_with_details(&raw, "fish").unwrap();
         let text = render_resolution(&resolution, RenderOptions::default());
 
-        assert!(text.contains("conch explain fish"));
+        assert!(text.contains("conch explain fish init"));
         assert!(text.contains("Block order"));
         assert!(text.contains("  1. base"));
         assert!(text.contains("  2. nvim"));
@@ -382,5 +414,6 @@ mod tests {
 
         assert!(text.contains("\x1b[1mconch explain\x1b[0m"));
         assert!(text.contains("\x1b[36mfish\x1b[0m"));
+        assert!(text.contains("\x1b[2minit\x1b[0m"));
     }
 }

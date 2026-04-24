@@ -7,7 +7,9 @@ Predicates are used by both `when` and `requires`.
 - each predicate list is an AND
 - `!` negates a single predicate atom
 - predicates are parsed by `conch`
-- predicates are evaluated by the generated shell code when sourced
+- during `check`, `init`, and `explain`, predicates remain descriptive and are not evaluated against the host
+- during `build`, `shell`, `command`, `file`, `dir`, `os`, and `hostname` are folded on the current machine, while `interactive`, `login`, and all `env:*` predicates remain runtime checks
+- any predicates that survive are evaluated by the generated shell code when sourced
 
 ## Supported atoms
 
@@ -96,5 +98,6 @@ requires = ["dir:~/.local/bin"]
 ## v1 notes
 
 - conch validates predicate syntax but does not evaluate predicates during check/init/explain
-- providers compile these predicates into shell-native checks
+- `build` folds only `shell`, `command`, `file`, `dir`, `os`, and `hostname`, and does so on the current machine
+- providers compile any remaining predicates into shell-native checks
 - conflict detection does not attempt predicate satisfiability or mutual-exclusion reasoning

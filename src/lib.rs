@@ -12,6 +12,7 @@
 //! 6. **Providers** — [`provider`] renders guarded [`ir::ResolvedIr`] to Fish
 //!    or Bash with shell-native predicate checks.
 
+pub mod build;
 pub mod cli;
 pub mod config;
 pub mod error;

@@ -5,6 +5,8 @@
 //! - `!` negates a single predicate atom
 //! - `when` and `requires` share syntax but differ in intent
 
+use std::fmt;
+
 use crate::error::ConchError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +27,26 @@ pub enum PredicateAtom {
     Dir(String),
     Os(String),
     Hostname(String),
+}
+
+impl fmt::Display for Predicate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.negated {
+            f.write_str("!")?;
+        }
+        match &self.atom {
+            PredicateAtom::Interactive => f.write_str("interactive"),
+            PredicateAtom::Login => f.write_str("login"),
+            PredicateAtom::Shell(name) => write!(f, "shell:{name}"),
+            PredicateAtom::Command(name) => write!(f, "command:{name}"),
+            PredicateAtom::EnvExists(name) => write!(f, "env:{name}"),
+            PredicateAtom::EnvEquals { name, value } => write!(f, "env:{name}={value}"),
+            PredicateAtom::File(path) => write!(f, "file:{path}"),
+            PredicateAtom::Dir(path) => write!(f, "dir:{path}"),
+            PredicateAtom::Os(name) => write!(f, "os:{name}"),
+            PredicateAtom::Hostname(name) => write!(f, "hostname:{name}"),
+        }
+    }
 }
 
 impl Predicate {
@@ -159,6 +181,29 @@ pub fn parse_predicates(values: &[String]) -> Result<Vec<Predicate>, ConchError>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_predicates_for_display() {
+        assert_eq!(
+            Predicate {
+                negated: true,
+                atom: PredicateAtom::Shell("fish".into()),
+            }
+            .to_string(),
+            "!shell:fish"
+        );
+        assert_eq!(
+            Predicate {
+                negated: false,
+                atom: PredicateAtom::EnvEquals {
+                    name: "A".into(),
+                    value: "b".into(),
+                },
+            }
+            .to_string(),
+            "env:A=b"
+        );
+    }
 
     #[test]
     fn parses_predicates() {

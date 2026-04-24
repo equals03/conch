@@ -1,4 +1,4 @@
-//! CLI entry (`check`, `init`, `explain`, `complete`).
+//! CLI entry (`check`, `init`, `build`, `explain`, `complete`).
 
 use std::env;
 use std::fs;
@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 
+use crate::build::{resolve_build, resolve_build_with_details};
 use crate::config::RawConfig;
 use crate::error::ConchError;
-use crate::explain::{render_resolution, RenderOptions};
+use crate::explain::{render_resolution_for, ExplainMode, RenderOptions};
 use crate::provider::{BashProvider, FishProvider};
 use crate::resolve::{resolve, resolve_with_details};
 
@@ -32,6 +33,12 @@ pub enum Command {
         /// Target shell to validate. If omitted, conch validates both fish and bash.
         #[arg(value_enum)]
         shell: Option<ShellKind>,
+        /// Explain what `check` would validate instead of returning success-only output.
+        #[arg(long)]
+        explain: bool,
+        /// Control ANSI color in explain output.
+        #[arg(long, value_enum, default_value = "auto")]
+        color: ColorMode,
     },
     /// Generate shell-native init output and print it to stdout.
     Init {
@@ -41,6 +48,27 @@ pub enum Command {
         /// Target shell to generate init output for.
         #[arg(value_enum)]
         shell: ShellKind,
+        /// Explain what `init` would emit instead of printing shell output.
+        #[arg(long)]
+        explain: bool,
+        /// Control ANSI color in explain output.
+        #[arg(long, value_enum, default_value = "auto")]
+        color: ColorMode,
+    },
+    /// Generate host-bound shell output with build-time folding of selected predicates.
+    Build {
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Target shell to generate build output for.
+        #[arg(value_enum)]
+        shell: ShellKind,
+        /// Explain what `build` would emit instead of printing shell output.
+        #[arg(long)]
+        explain: bool,
+        /// Control ANSI color in explain output.
+        #[arg(long, value_enum, default_value = "auto")]
+        color: ColorMode,
     },
     /// Explain ordered blocks, guards, and write ordering for a target shell.
     Explain {
@@ -50,6 +78,9 @@ pub enum Command {
         /// Target shell to explain.
         #[arg(value_enum)]
         shell: ShellKind,
+        /// Optional action semantics to explain. Defaults to `init`.
+        #[arg(value_enum)]
+        action: Option<ExplainAction>,
         /// Control ANSI color in explain output.
         #[arg(long, value_enum, default_value = "auto")]
         color: ColorMode,
@@ -73,6 +104,23 @@ impl ShellKind {
         match self {
             Self::Fish => "fish",
             Self::Bash => "bash",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum ExplainAction {
+    Check,
+    Init,
+    Build,
+}
+
+impl ExplainAction {
+    fn mode(self) -> ExplainMode {
+        match self {
+            Self::Check => ExplainMode::Check,
+            Self::Init => ExplainMode::Init,
+            Self::Build => ExplainMode::Build,
         }
     }
 }
@@ -135,44 +183,56 @@ impl ConfigFormat {
 pub fn run() -> Result<(), ConchError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check { config, shell } => {
+        Command::Check {
+            config,
+            shell,
+            explain,
+            color,
+        } => {
             let raw = load_selected_config(config)?;
-            match shell {
-                Some(shell) => {
-                    resolve(&raw, shell.as_str())?;
-                }
-                None => {
-                    for shell in [ShellKind::Fish, ShellKind::Bash] {
-                        resolve(&raw, shell.as_str())?;
-                    }
-                }
+            if explain {
+                print_check_explain(&raw, shell, color)?;
+            } else {
+                run_check(&raw, shell)?;
             }
             Ok(())
         }
-        Command::Init { config, shell } => {
+        Command::Init {
+            config,
+            shell,
+            explain,
+            color,
+        } => {
             let raw = load_selected_config(config)?;
-            let ir = resolve(&raw, shell.as_str())?;
-            let text = match shell {
-                ShellKind::Fish => FishProvider.render_init(&ir, raw.init.guard.enabled),
-                ShellKind::Bash => BashProvider.render_init(&ir, raw.init.guard.enabled),
-            };
-            print!("{text}");
+            if explain {
+                print_explain(&raw, shell, ExplainAction::Init, color)?;
+            } else {
+                print_shell_output(&raw, shell, ExplainAction::Init)?;
+            }
+            Ok(())
+        }
+        Command::Build {
+            config,
+            shell,
+            explain,
+            color,
+        } => {
+            let raw = load_selected_config(config)?;
+            if explain {
+                print_explain(&raw, shell, ExplainAction::Build, color)?;
+            } else {
+                print_shell_output(&raw, shell, ExplainAction::Build)?;
+            }
             Ok(())
         }
         Command::Explain {
             config,
             shell,
+            action,
             color,
         } => {
             let raw = load_selected_config(config)?;
-            let resolution = resolve_with_details(&raw, shell.as_str())?;
-            let text = render_resolution(
-                &resolution,
-                RenderOptions {
-                    color: color.use_color(),
-                },
-            );
-            print!("{text}");
+            print_explain(&raw, shell, action.unwrap_or(ExplainAction::Init), color)?;
             Ok(())
         }
         Command::Complete { shell } => {
@@ -182,6 +242,85 @@ pub fn run() -> Result<(), ConchError> {
             Ok(())
         }
     }
+}
+
+fn run_check(raw: &RawConfig, shell: Option<ShellKind>) -> Result<(), ConchError> {
+    match shell {
+        Some(shell) => {
+            resolve(raw, shell.as_str())?;
+        }
+        None => {
+            for shell in [ShellKind::Fish, ShellKind::Bash] {
+                resolve(raw, shell.as_str())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_shell_output(
+    raw: &RawConfig,
+    shell: ShellKind,
+    action: ExplainAction,
+) -> Result<(), ConchError> {
+    let ir = match action {
+        ExplainAction::Init => resolve(raw, shell.as_str())?,
+        ExplainAction::Build => resolve_build(raw, shell.as_str())?,
+        ExplainAction::Check => unreachable!("check does not emit shell output"),
+    };
+    let text = match shell {
+        ShellKind::Fish => FishProvider.render_init(&ir, raw.init.guard.enabled),
+        ShellKind::Bash => BashProvider.render_init(&ir, raw.init.guard.enabled),
+    };
+    print!("{text}");
+    Ok(())
+}
+
+fn print_explain(
+    raw: &RawConfig,
+    shell: ShellKind,
+    action: ExplainAction,
+    color: ColorMode,
+) -> Result<(), ConchError> {
+    let text = render_explain(raw, shell, action, color)?;
+    print!("{text}");
+    Ok(())
+}
+
+fn render_explain(
+    raw: &RawConfig,
+    shell: ShellKind,
+    action: ExplainAction,
+    color: ColorMode,
+) -> Result<String, ConchError> {
+    let resolution = match action {
+        ExplainAction::Check | ExplainAction::Init => resolve_with_details(raw, shell.as_str())?,
+        ExplainAction::Build => resolve_build_with_details(raw, shell.as_str())?,
+    };
+    Ok(render_resolution_for(
+        &resolution,
+        RenderOptions {
+            color: color.use_color(),
+        },
+        action.mode(),
+    ))
+}
+
+fn print_check_explain(
+    raw: &RawConfig,
+    shell: Option<ShellKind>,
+    color: ColorMode,
+) -> Result<(), ConchError> {
+    let text = match shell {
+        Some(shell) => render_explain(raw, shell, ExplainAction::Check, color)?,
+        None => {
+            let fish = render_explain(raw, ShellKind::Fish, ExplainAction::Check, color)?;
+            let bash = render_explain(raw, ShellKind::Bash, ExplainAction::Check, color)?;
+            format!("{fish}\n\n{bash}")
+        }
+    };
+    print!("{text}");
+    Ok(())
 }
 
 fn load_selected_config(path: Option<PathBuf>) -> Result<RawConfig, ConchError> {
