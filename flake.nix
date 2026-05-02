@@ -52,6 +52,13 @@
       conch = craneLib.buildPackage (common-args
         // {
           cargoArtifacts = cargo-artifacts;
+          meta = with pkgs.lib; {
+            description = "Declarative shell-configuration compiler";
+            homepage = "https://github.com/equals03/conch";
+            license = licenses.mit;
+            maintainers = [];
+            mainProgram = "conch";
+          };
         });
 
       app = flake-utils.lib.mkApp {
