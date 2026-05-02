@@ -658,7 +658,10 @@ mod tests {
 
         let err = Config::try_from(&raw).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("block `demo` source entry #1 command arg #2"), "{msg}");
+        assert!(
+            msg.contains("block `demo` source entry #1 command arg #2"),
+            "{msg}"
+        );
         assert!(msg.contains("only `${env:VAR}`"), "{msg}");
     }
 
