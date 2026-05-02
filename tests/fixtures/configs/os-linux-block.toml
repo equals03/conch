@@ -1,0 +1,5 @@
+[blocks.linux_only]
+when = ["os:linux", "shell:fish"]
+
+[blocks.linux_only.env]
+CONCH_LINUX_ONLY = "1"

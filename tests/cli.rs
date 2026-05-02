@@ -229,3 +229,86 @@ fn missing_config_is_reported() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("config file not found"));
 }
+
+#[test]
+fn build_respects_os_flag_for_folding() {
+    let cfg = "tests/fixtures/configs/os-linux-block.toml";
+
+    let freebsd = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(["build", "fish", "--config", cfg, "--os", "freebsd"])
+        .output()
+        .expect("failed to run conch binary");
+    assert!(freebsd.status.success(), "{:?}", freebsd.stderr);
+    let out = String::from_utf8(freebsd.stdout).unwrap();
+    assert!(
+        !out.contains("CONCH_LINUX_ONLY"),
+        "expected linux-only block dropped: {out}"
+    );
+
+    let linux = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(["build", "fish", "--config", cfg, "--os", "linux"])
+        .output()
+        .expect("failed to run conch binary");
+    assert!(linux.status.success(), "{:?}", linux.stderr);
+    let out = String::from_utf8(linux.stdout).unwrap();
+    assert!(
+        out.contains("CONCH_LINUX_ONLY"),
+        "expected linux block kept: {out}"
+    );
+}
+
+#[test]
+fn init_explain_matches_with_shared_os_flag() {
+    let cfg = "tests/fixtures/configs/os-linux-block.toml";
+    let args_init = [
+        "init",
+        "fish",
+        "--explain",
+        "--color",
+        "never",
+        "--config",
+        cfg,
+        "--os",
+        "freebsd",
+    ];
+    let args_explain = [
+        "explain", "fish", "init", "--color", "never", "--config", cfg, "--os", "freebsd",
+    ];
+    let init = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(args_init)
+        .output()
+        .expect("failed to run conch binary");
+    let explain = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(args_explain)
+        .output()
+        .expect("failed to run conch binary");
+
+    assert!(init.status.success(), "{:?}", init.stderr);
+    assert!(explain.status.success(), "{:?}", explain.stderr);
+    assert_eq!(init.stdout, explain.stdout);
+}
+
+#[test]
+fn explain_check_rejects_host_folding_flags() {
+    let output = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args([
+            "explain",
+            "fish",
+            "check",
+            "--config",
+            "tests/fixtures/configs/simple-single.toml",
+            "--os",
+            "linux",
+            "--hostname",
+            "demo-host",
+        ])
+        .output()
+        .expect("failed to run conch binary");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("does not use `--os` or `--hostname`"),
+        "{stderr}"
+    );
+}

@@ -1,9 +1,12 @@
 //! Graph ordering, conflict analysis, and shell-targeted resolution.
 //!
 //! Semantics:
-//! - `conch` does not evaluate predicates against the host during check/init/explain
+//! - `conch check` (and `explain` in check mode) does not evaluate predicates against the host
+//! - `conch init` and `explain` in init mode fold `shell:`, `os:`, and `hostname:` using the
+//!   selected target shell plus the `build` module's Rust-side host detection, unless overridden
+//!   with `--os` / `--hostname` on `conch init` / `build` / `explain`
+//! - `conch build` folds further predicates (`build` module)
 //! - all blocks are ordered statically through the block graph
-//! - providers render `when` / `requires` as shell-native guards
 //! - env and alias conflicts are checked conservatively across all blocks
 //! - if two blocks write the same env/alias key and the graph does not order them,
 //!   resolution fails even if their runtime predicates might differ
@@ -179,7 +182,7 @@ fn build_blocks_and_reports(
     })
 }
 
-fn parse_predicates_for(
+pub(crate) fn parse_predicates_for(
     block_id: &str,
     field: &str,
     values: &[String],
@@ -358,6 +361,10 @@ fn block_for_shell(block: &BlockConfig, shell: &str) -> EffectiveBlock {
     }
 
     effective
+}
+
+pub(crate) fn actions_for_block(block: &BlockConfig, shell: &str) -> Vec<Action> {
+    effective_actions(&block_for_shell(block, shell))
 }
 
 fn merge_override(effective: &mut EffectiveBlock, override_cfg: &ShellOverride) {

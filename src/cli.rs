@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 
-use crate::build::{resolve_build, resolve_build_with_details};
+use crate::build::{
+    resolve_build, resolve_build_with_details, resolve_init, resolve_init_with_details,
+    HostFoldContext,
+};
 use crate::config::RawConfig;
 use crate::error::ConchError;
 use crate::explain::{render_resolution_for, ExplainMode, RenderOptions};
@@ -48,6 +51,12 @@ pub enum Command {
         /// Target shell to generate init output for.
         #[arg(value_enum)]
         shell: ShellKind,
+        /// Override OS label for `os:` predicate folding (e.g. `linux`, `macos`). Default: detected from the compiler target.
+        #[arg(long)]
+        os: Option<String>,
+        /// Override hostname for `hostname:` predicate folding. Default: OS hostname.
+        #[arg(long)]
+        hostname: Option<String>,
         /// Explain what `init` would emit instead of printing shell output.
         #[arg(long)]
         explain: bool,
@@ -63,6 +72,12 @@ pub enum Command {
         /// Target shell to generate build output for.
         #[arg(value_enum)]
         shell: ShellKind,
+        /// Override OS label for `os:` predicate folding (e.g. `linux`, `macos`). Default: detected from the compiler target.
+        #[arg(long)]
+        os: Option<String>,
+        /// Override hostname for `hostname:` predicate folding. Default: OS hostname.
+        #[arg(long)]
+        hostname: Option<String>,
         /// Explain what `build` would emit instead of printing shell output.
         #[arg(long)]
         explain: bool,
@@ -81,6 +96,12 @@ pub enum Command {
         /// Optional action semantics to explain. Defaults to `init`.
         #[arg(value_enum)]
         action: Option<ExplainAction>,
+        /// Override OS label for `os:` folding when action is `init` or `build`.
+        #[arg(long)]
+        os: Option<String>,
+        /// Override hostname for `hostname:` folding when action is `init` or `build`.
+        #[arg(long)]
+        hostname: Option<String>,
         /// Control ANSI color in explain output.
         #[arg(long, value_enum, default_value = "auto")]
         color: ColorMode,
@@ -201,28 +222,34 @@ pub fn run() -> Result<(), ConchError> {
         Command::Init {
             config,
             shell,
+            os,
+            hostname,
             explain,
             color,
         } => {
             let raw = load_selected_config(config)?;
+            let host_ctx = host_fold_context(os, hostname);
             if explain {
-                print_explain(&raw, shell, ExplainAction::Init, color)?;
+                print_explain(&raw, shell, ExplainAction::Init, color, &host_ctx)?;
             } else {
-                print_shell_output(&raw, shell, ExplainAction::Init)?;
+                print_shell_output(&raw, shell, ExplainAction::Init, &host_ctx)?;
             }
             Ok(())
         }
         Command::Build {
             config,
             shell,
+            os,
+            hostname,
             explain,
             color,
         } => {
             let raw = load_selected_config(config)?;
+            let host_ctx = host_fold_context(os, hostname);
             if explain {
-                print_explain(&raw, shell, ExplainAction::Build, color)?;
+                print_explain(&raw, shell, ExplainAction::Build, color, &host_ctx)?;
             } else {
-                print_shell_output(&raw, shell, ExplainAction::Build)?;
+                print_shell_output(&raw, shell, ExplainAction::Build, &host_ctx)?;
             }
             Ok(())
         }
@@ -230,10 +257,15 @@ pub fn run() -> Result<(), ConchError> {
             config,
             shell,
             action,
+            os,
+            hostname,
             color,
         } => {
+            let action = action.unwrap_or(ExplainAction::Init);
+            validate_explain_host_flags(action, os.as_deref(), hostname.as_deref())?;
             let raw = load_selected_config(config)?;
-            print_explain(&raw, shell, action.unwrap_or(ExplainAction::Init), color)?;
+            let host_ctx = host_fold_context(os, hostname);
+            print_explain(&raw, shell, action, color, &host_ctx)?;
             Ok(())
         }
         Command::Complete { shell } => {
@@ -259,14 +291,39 @@ fn run_check(raw: &RawConfig, shell: Option<ShellKind>) -> Result<(), ConchError
     Ok(())
 }
 
+fn host_fold_context(os: Option<String>, hostname: Option<String>) -> HostFoldContext {
+    HostFoldContext {
+        os: os
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty()),
+        hostname: hostname
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    }
+}
+
+fn validate_explain_host_flags(
+    action: ExplainAction,
+    os: Option<&str>,
+    hostname: Option<&str>,
+) -> Result<(), ConchError> {
+    if matches!(action, ExplainAction::Check) && (os.is_some() || hostname.is_some()) {
+        return Err(ConchError::Validation(
+            "`conch explain ... check` does not use `--os` or `--hostname`; remove those flags or choose `init` / `build`".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn print_shell_output(
     raw: &RawConfig,
     shell: ShellKind,
     action: ExplainAction,
+    host_ctx: &HostFoldContext,
 ) -> Result<(), ConchError> {
     let ir = match action {
-        ExplainAction::Init => resolve(raw, shell.as_str())?,
-        ExplainAction::Build => resolve_build(raw, shell.as_str())?,
+        ExplainAction::Init => resolve_init(raw, shell.as_str(), host_ctx)?,
+        ExplainAction::Build => resolve_build(raw, shell.as_str(), host_ctx)?,
         ExplainAction::Check => unreachable!("check does not emit shell output"),
     };
     let text = match shell {
@@ -282,8 +339,9 @@ fn print_explain(
     shell: ShellKind,
     action: ExplainAction,
     color: ColorMode,
+    host_ctx: &HostFoldContext,
 ) -> Result<(), ConchError> {
-    let text = render_explain(raw, shell, action, color)?;
+    let text = render_explain(raw, shell, action, color, host_ctx)?;
     print!("{text}");
     Ok(())
 }
@@ -293,10 +351,12 @@ fn render_explain(
     shell: ShellKind,
     action: ExplainAction,
     color: ColorMode,
+    host_ctx: &HostFoldContext,
 ) -> Result<String, ConchError> {
     let resolution = match action {
-        ExplainAction::Check | ExplainAction::Init => resolve_with_details(raw, shell.as_str())?,
-        ExplainAction::Build => resolve_build_with_details(raw, shell.as_str())?,
+        ExplainAction::Check => resolve_with_details(raw, shell.as_str())?,
+        ExplainAction::Init => resolve_init_with_details(raw, shell.as_str(), host_ctx)?,
+        ExplainAction::Build => resolve_build_with_details(raw, shell.as_str(), host_ctx)?,
     };
     Ok(render_resolution_for(
         &resolution,
@@ -312,11 +372,14 @@ fn print_check_explain(
     shell: Option<ShellKind>,
     color: ColorMode,
 ) -> Result<(), ConchError> {
+    let host_ctx = HostFoldContext::default();
     let text = match shell {
-        Some(shell) => render_explain(raw, shell, ExplainAction::Check, color)?,
+        Some(shell) => render_explain(raw, shell, ExplainAction::Check, color, &host_ctx)?,
         None => {
-            let fish = render_explain(raw, ShellKind::Fish, ExplainAction::Check, color)?;
-            let bash = render_explain(raw, ShellKind::Bash, ExplainAction::Check, color)?;
+            let fish =
+                render_explain(raw, ShellKind::Fish, ExplainAction::Check, color, &host_ctx)?;
+            let bash =
+                render_explain(raw, ShellKind::Bash, ExplainAction::Check, color, &host_ctx)?;
             format!("{fish}\n\n{bash}")
         }
     };

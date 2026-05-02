@@ -103,9 +103,10 @@ fn init_renders_shell_override_and_target_shell_predicates() {
         "--config",
         "tests/fixtures/configs/shell-override.toml",
     ]));
-    assert!(bash.contains("alias vi='nvim'"));
+    assert!(!bash.contains("# block: core"));
+    assert!(!bash.contains("alias vi='nvim'"));
     assert!(!bash.contains("alias v='nvim'"));
-    assert!(bash.contains("if false; then"));
+    assert!(!bash.contains("if false; then"));
 }
 
 #[test]

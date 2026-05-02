@@ -2,50 +2,209 @@
 //!
 //! `conch build` shares the same parse/order/conflict pipeline as `init`, then
 //! evaluates host-bound predicates ahead of time and drops impossible blocks.
+//!
+//! `conch init` applies a narrower fold: `shell:`, `os:`, and `hostname:` are resolved ahead
+//! of time, so emitted scripts avoid impossible target-shell blocks and need not call `uname` /
+//! `hostname`.
+//!
+//! Fold values default to [`std::env::consts::OS`] and [`hostname::get`]; use
+//! [`HostFoldContext`] (or `conch init` / `build` `--os` / `--hostname`) to override.
 
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use indexmap::IndexMap;
 
-use crate::config::RawConfig;
+use crate::config::{Config, RawConfig};
 use crate::error::ConchError;
+use crate::graph::build_graph;
 use crate::ir::{Action, Block, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
 use crate::provider::subst::{parse_interpolated_value, InterpSegment};
 use crate::resolve::{
-    resolve_with_details, BindingReport, BindingValue, BindingWrite, BlockReport, PathContribution,
-    Resolution,
+    actions_for_block, parse_predicates_for, BindingReport, BindingValue, BindingWrite,
+    BlockReport, PathContribution, Resolution,
 };
 
-pub fn resolve_build(raw: &RawConfig, target_shell: &str) -> Result<ResolvedIr, ConchError> {
-    Ok(resolve_build_with_details(raw, target_shell)?.ir)
+/// Overrides for folding `os:` and `hostname:` predicates during `conch init` / `conch build`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostFoldContext {
+    /// Lowercase OS label (e.g. `linux`, `macos`) for `os:` folding; `None` uses [`detect_os`].
+    pub os: Option<String>,
+    /// Hostname for `hostname:` folding; `None` uses [`detect_hostname`].
+    pub hostname: Option<String>,
+}
+
+impl HostFoldContext {
+    fn effective_os(&self) -> String {
+        self.os
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_else(detect_os)
+    }
+
+    fn effective_hostname(&self) -> Option<String> {
+        if let Some(ref h) = self.hostname {
+            let t = h.trim();
+            if t.is_empty() {
+                return None;
+            }
+            return Some(t.to_string());
+        }
+        detect_hostname()
+    }
+}
+
+/// OS string for predicate folding: [`std::env::consts::OS`] in ASCII lowercase.
+pub fn detect_os() -> String {
+    std::env::consts::OS.to_ascii_lowercase()
+}
+
+/// Hostname from the OS (`gethostname`), without running the `hostname` executable.
+pub fn detect_hostname() -> Option<String> {
+    let bytes = hostname::get().ok()?;
+    let s = bytes.to_string_lossy().trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn os_predicate_matches(host_os: &str, config_value: &str) -> bool {
+    let host_os = host_os.trim().to_ascii_lowercase();
+    let pred = config_value.trim().to_ascii_lowercase();
+    if host_os == pred {
+        return true;
+    }
+    // Legacy configs used `uname -s` style `Darwin` → `os:darwin`; Rust reports `macos`.
+    (host_os == "macos" && pred == "darwin") || (host_os == "darwin" && pred == "macos")
+}
+
+pub fn resolve_build(
+    raw: &RawConfig,
+    target_shell: &str,
+    host: &HostFoldContext,
+) -> Result<ResolvedIr, ConchError> {
+    Ok(resolve_build_with_details(raw, target_shell, host)?.ir)
 }
 
 pub fn resolve_build_with_details(
     raw: &RawConfig,
     target_shell: &str,
+    host: &HostFoldContext,
 ) -> Result<Resolution, ConchError> {
-    let resolution = resolve_with_details(raw, target_shell)?;
-    Ok(fold_resolution_for_build(resolution))
+    resolve_folded_with_details(raw, target_shell, PredicateFoldMode::Full, host)
 }
 
-fn fold_resolution_for_build(resolution: Resolution) -> Resolution {
-    let blocks: Vec<Block> = resolution
-        .ir
-        .blocks
-        .iter()
-        .filter_map(|block| fold_block_for_build(block, &resolution.target_shell))
-        .collect();
-
-    rebuild_resolution(&resolution.target_shell, blocks)
+/// Like [`resolve_build`], but only folds `shell:`, `os:`, and `hostname:` for the selected
+/// target shell and the host that runs `conch`.
+pub fn resolve_init(
+    raw: &RawConfig,
+    target_shell: &str,
+    host: &HostFoldContext,
+) -> Result<ResolvedIr, ConchError> {
+    Ok(resolve_init_with_details(raw, target_shell, host)?.ir)
 }
 
-fn fold_block_for_build(block: &Block, target_shell: &str) -> Option<Block> {
-    let when = fold_predicates_for_build(&block.when, target_shell)?;
-    let requires = fold_predicates_for_build(&block.requires, target_shell)?;
+pub fn resolve_init_with_details(
+    raw: &RawConfig,
+    target_shell: &str,
+    host: &HostFoldContext,
+) -> Result<Resolution, ConchError> {
+    resolve_folded_with_details(raw, target_shell, PredicateFoldMode::Init, host)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PredicateFoldMode {
+    /// Fold every predicate we can evaluate on this machine (full `conch build` semantics).
+    Full,
+    /// Fold `shell:`, `os:`, and `hostname:` so `conch init` output avoids impossible target
+    /// shell blocks and shell calls to `uname` / `hostname`.
+    Init,
+}
+
+fn resolve_folded_with_details(
+    raw: &RawConfig,
+    target_shell: &str,
+    mode: PredicateFoldMode,
+    host: &HostFoldContext,
+) -> Result<Resolution, ConchError> {
+    let config = Config::try_from(raw)?;
+    let block_ids: Vec<String> = config.blocks.keys().cloned().collect();
+    let graph = build_graph(&config, &block_ids)?;
+    let order = graph.topo_order()?;
+
+    let mut blocks = Vec::new();
+    let mut block_order = Vec::new();
+    let mut block_reports = Vec::new();
+
+    for block_id in &order {
+        let block_cfg = &config.blocks[block_id];
+        let actions = actions_for_block(block_cfg, target_shell);
+        let source_count = actions
+            .iter()
+            .filter(|action| matches!(action, Action::Source(_)))
+            .count();
+        let source_line_count = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::SourceLines { lines } => Some(
+                    lines
+                        .iter()
+                        .map(|line| crate::provider::verbatim_line_count(line))
+                        .sum::<usize>(),
+                ),
+                _ => None,
+            })
+            .sum();
+        let block = Block {
+            block_id: block_id.clone(),
+            when: parse_predicates_for(block_id, "when", &block_cfg.when)?,
+            requires: parse_predicates_for(block_id, "requires", &block_cfg.requires)?,
+            actions,
+        };
+
+        let Some(block) = fold_block(&block, target_shell, mode, host) else {
+            continue;
+        };
+
+        block_order.push(block.block_id.clone());
+        block_reports.push(BlockReport {
+            block_id: block.block_id.clone(),
+            when: block.when.iter().map(ToString::to_string).collect(),
+            requires: block.requires.iter().map(ToString::to_string).collect(),
+            guarded: !(block.when.is_empty() && block.requires.is_empty()),
+            action_count: block.actions.len(),
+            source_count,
+            source_line_count,
+        });
+
+        if !block.actions.is_empty() {
+            blocks.push(block);
+        }
+    }
+
+    validate_folded_writers(&blocks, &graph, target_shell)?;
+    Ok(rebuild_resolution(
+        target_shell,
+        block_order,
+        block_reports,
+        blocks,
+    ))
+}
+
+fn fold_block(
+    block: &Block,
+    target_shell: &str,
+    mode: PredicateFoldMode,
+    host: &HostFoldContext,
+) -> Option<Block> {
+    let when = fold_predicates(&block.when, target_shell, mode, host)?;
+    let requires = fold_predicates(&block.requires, target_shell, mode, host)?;
 
     Some(Block {
         block_id: block.block_id.clone(),
@@ -55,14 +214,16 @@ fn fold_block_for_build(block: &Block, target_shell: &str) -> Option<Block> {
     })
 }
 
-fn fold_predicates_for_build(
+fn fold_predicates(
     predicates: &[Predicate],
     target_shell: &str,
+    mode: PredicateFoldMode,
+    host: &HostFoldContext,
 ) -> Option<Vec<Predicate>> {
     let mut retained = Vec::new();
 
     for predicate in predicates {
-        match eval_build_time_predicate(predicate, target_shell) {
+        match eval_build_time_predicate(predicate, target_shell, mode, host) {
             Some(true) => {}
             Some(false) => return None,
             None => retained.push(predicate.clone()),
@@ -72,39 +233,56 @@ fn fold_predicates_for_build(
     Some(retained)
 }
 
-fn eval_build_time_predicate(predicate: &Predicate, target_shell: &str) -> Option<bool> {
+fn eval_build_time_predicate(
+    predicate: &Predicate,
+    target_shell: &str,
+    mode: PredicateFoldMode,
+    host: &HostFoldContext,
+) -> Option<bool> {
     let value = match &predicate.atom {
         PredicateAtom::Interactive
         | PredicateAtom::Login
         | PredicateAtom::EnvExists(_)
         | PredicateAtom::EnvEquals { .. } => return None,
-        PredicateAtom::Shell(name) => name.eq_ignore_ascii_case(target_shell),
-        PredicateAtom::Command(name) => command_lookup_build(name)?,
-        PredicateAtom::File(path) => path_predicate_build(&expanded_path(path)?, false)?,
-        PredicateAtom::Dir(path) => path_predicate_build(&expanded_path(path)?, true)?,
-        PredicateAtom::Os(name) => {
-            let kernel = kernel_uname_s()?;
-            kernel.to_ascii_lowercase() == name.as_str()
+        PredicateAtom::Shell(name)
+            if matches!(mode, PredicateFoldMode::Full | PredicateFoldMode::Init) =>
+        {
+            name.eq_ignore_ascii_case(target_shell)
         }
+        PredicateAtom::Shell(_) => return None,
+        PredicateAtom::Command(name) if mode == PredicateFoldMode::Full => {
+            command_lookup_build(name)?
+        }
+        PredicateAtom::Command(_) => return None,
+        PredicateAtom::File(path) if mode == PredicateFoldMode::Full => {
+            path_predicate_build(&expanded_path(path)?, false)?
+        }
+        PredicateAtom::File(_) => return None,
+        PredicateAtom::Dir(path) if mode == PredicateFoldMode::Full => {
+            path_predicate_build(&expanded_path(path)?, true)?
+        }
+        PredicateAtom::Dir(_) => return None,
+        PredicateAtom::Os(name) => os_predicate_matches(&host.effective_os(), name),
         PredicateAtom::Hostname(name) => {
-            let host = host_name()?;
-            host == *name
+            let hostn = host.effective_hostname()?;
+            hostn == *name
         }
     };
 
     Some(if predicate.negated { !value } else { value })
 }
 
-fn rebuild_resolution(target_shell: &str, blocks: Vec<Block>) -> Resolution {
+fn rebuild_resolution(
+    target_shell: &str,
+    block_order: Vec<String>,
+    block_reports: Vec<BlockReport>,
+    blocks: Vec<Block>,
+) -> Resolution {
     let mut env_writers: IndexMap<String, Vec<BindingWrite>> = IndexMap::new();
     let mut alias_writers: IndexMap<String, Vec<BindingWrite>> = IndexMap::new();
     let mut path_ops = Vec::new();
-    let mut block_reports = Vec::new();
 
     for block in &blocks {
-        let mut source_count = 0;
-        let mut source_line_count = 0;
-
         for action in &block.actions {
             match action {
                 Action::SetEnv { key, value } => {
@@ -129,28 +307,10 @@ fn rebuild_resolution(target_shell: &str, blocks: Vec<Block>) -> Resolution {
                     block_id: block.block_id.clone(),
                     op: op.clone(),
                 }),
-                Action::Source(_) => source_count += 1,
-                Action::SourceLines { lines } => {
-                    source_line_count += lines
-                        .iter()
-                        .map(|line| crate::provider::verbatim_line_count(line))
-                        .sum::<usize>();
-                }
+                Action::Source(_) | Action::SourceLines { .. } => {}
             }
         }
-
-        block_reports.push(BlockReport {
-            block_id: block.block_id.clone(),
-            when: block.when.iter().map(ToString::to_string).collect(),
-            requires: block.requires.iter().map(ToString::to_string).collect(),
-            guarded: !(block.when.is_empty() && block.requires.is_empty()),
-            action_count: block.actions.len(),
-            source_count,
-            source_line_count,
-        });
     }
-
-    let block_order = blocks.iter().map(|block| block.block_id.clone()).collect();
 
     Resolution {
         target_shell: target_shell.to_string(),
@@ -173,17 +333,65 @@ fn binding_reports(writers: &IndexMap<String, Vec<BindingWrite>>) -> Vec<Binding
         .collect()
 }
 
-fn kernel_uname_s() -> Option<String> {
-    let output = Command::new("uname").arg("-s").output().ok()?;
-    if !output.status.success() {
-        return None;
+fn validate_folded_writers(
+    blocks: &[Block],
+    graph: &crate::graph::BlockGraph,
+    target_shell: &str,
+) -> Result<(), ConchError> {
+    let mut env_writers: IndexMap<String, Vec<String>> = IndexMap::new();
+    let mut alias_writers: IndexMap<String, Vec<String>> = IndexMap::new();
+
+    for block in blocks {
+        for action in &block.actions {
+            match action {
+                Action::SetEnv { key, .. } => {
+                    validate_folded_writer(
+                        &mut env_writers,
+                        key,
+                        &block.block_id,
+                        graph,
+                        target_shell,
+                        "env",
+                    )?;
+                }
+                Action::SetAlias { name, .. } => {
+                    validate_folded_writer(
+                        &mut alias_writers,
+                        name,
+                        &block.block_id,
+                        graph,
+                        target_shell,
+                        "alias",
+                    )?;
+                }
+                Action::Path(_) | Action::Source(_) | Action::SourceLines { .. } => {}
+            }
+        }
     }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
+
+    Ok(())
+}
+
+fn validate_folded_writer(
+    writers: &mut IndexMap<String, Vec<String>>,
+    key: &str,
+    block_id: &str,
+    graph: &crate::graph::BlockGraph,
+    target_shell: &str,
+    kind: &str,
+) -> Result<(), ConchError> {
+    let entry = writers.entry(key.to_string()).or_default();
+    for previous in entry.iter() {
+        let ordered =
+            graph.ordered_before(previous, block_id) || graph.ordered_before(block_id, previous);
+        if !ordered {
+            return Err(ConchError::MergeConflict(format!(
+                "{kind} key `{key}` is written by blocks `{previous}` and `{block_id}` for shell `{target_shell}`, but the block graph does not order them. Add `before` or `after` to make the write order explicit."
+            )));
+        }
     }
+    entry.push(block_id.to_string());
+    Ok(())
 }
 
 fn command_lookup_build(name: &str) -> Option<bool> {
@@ -230,7 +438,10 @@ fn home_dir() -> Option<PathBuf> {
 
 fn expanded_path(value: &str) -> Option<PathBuf> {
     let segments = parse_interpolated_value(value).ok()?;
-    let home = if segments.iter().any(|segment| matches!(segment, InterpSegment::Home)) {
+    let home = if segments
+        .iter()
+        .any(|segment| matches!(segment, InterpSegment::Home))
+    {
         Some(home_dir()?.to_string_lossy().into_owned())
     } else {
         None
@@ -246,32 +457,6 @@ fn expanded_path(value: &str) -> Option<PathBuf> {
     }
 
     Some(PathBuf::from(rendered))
-}
-
-fn host_name() -> Option<String> {
-    if let Some(value) = env::var_os("HOSTNAME") {
-        let value = value.to_string_lossy().trim().to_string();
-        if !value.is_empty() {
-            return Some(value);
-        }
-    }
-    if let Some(value) = env::var_os("COMPUTERNAME") {
-        let value = value.to_string_lossy().trim().to_string();
-        if !value.is_empty() {
-            return Some(value);
-        }
-    }
-
-    let output = Command::new("hostname").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
 }
 
 #[cfg(test)]
@@ -341,7 +526,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert!(resolution.ir.blocks.is_empty());
         assert!(resolution.block_order.is_empty());
     }
@@ -358,7 +544,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert_eq!(resolution.ir.blocks[0].when.len(), 1);
         assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
@@ -384,7 +571,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
     }
@@ -402,7 +590,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
     }
@@ -428,7 +617,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert!(resolution.ir.blocks[0].requires.is_empty());
 
@@ -450,7 +640,8 @@ mod tests {
             blocks: IndexMap::from([("starship".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert!(matches!(
             resolution.ir.blocks[0].actions[0],
@@ -459,24 +650,176 @@ mod tests {
     }
 
     #[test]
-    fn build_folds_os_predicate_using_uname_kernel_name() {
-        let kernel = Command::new("uname").arg("-s").output().expect("uname -s");
-        let stdout = String::from_utf8_lossy(&kernel.stdout);
-        let kernel = stdout.trim();
-        assert!(!kernel.is_empty(), "uname -s returned empty output");
-        let lowered = kernel.to_ascii_lowercase();
+    fn build_folds_os_predicate_for_current_target() {
+        let os = detect_os();
 
         let mut block = BlockConfigToml::default();
-        block.when.push(format!("os:{lowered}"));
+        block.when.push(format!("os:{os}"));
         block.alias.insert("vim".into(), "nvim".into());
         let raw = RawConfig {
             init: Default::default(),
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert!(resolution.ir.blocks[0].when.is_empty());
+    }
+
+    #[test]
+    fn build_drops_block_when_os_override_mismatches_predicate() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("os:linux".into());
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+        let host = HostFoldContext {
+            os: Some("freebsd".into()),
+            hostname: None,
+        };
+        let resolution = resolve_build_with_details(&raw, "fish", &host).unwrap();
+        assert!(resolution.ir.blocks.is_empty());
+    }
+
+    #[test]
+    fn build_folds_os_darwin_when_effective_os_is_macos() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("os:darwin".into());
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+        let host = HostFoldContext {
+            os: Some("macos".into()),
+            hostname: None,
+        };
+        let resolution = resolve_build_with_details(&raw, "fish", &host).unwrap();
+        assert_eq!(resolution.ir.blocks.len(), 1);
+        assert!(resolution.ir.blocks[0].when.is_empty());
+    }
+
+    #[test]
+    fn init_folds_os_predicate_but_keeps_file_predicate() {
+        let root = temp_path("init-os-file");
+        let file = root.join("marker");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&file, "").unwrap();
+
+        let os = detect_os();
+
+        let mut block = BlockConfigToml::default();
+        block.when.push(format!("os:{os}"));
+        block.requires.push(format!("file:{}", file.display()));
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+
+        let resolution =
+            resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
+        assert_eq!(resolution.ir.blocks.len(), 1);
+        assert!(resolution.ir.blocks[0].when.is_empty());
+        assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn init_drops_false_shell_predicates() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("shell:bash".into());
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+
+        let resolution =
+            resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
+        assert!(resolution.ir.blocks.is_empty());
+    }
+
+    #[test]
+    fn init_folds_true_shell_predicates() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("shell:fish".into());
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+
+        let resolution =
+            resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
+        assert_eq!(resolution.ir.blocks.len(), 1);
+        assert!(resolution.ir.blocks[0].when.is_empty());
+    }
+
+    #[test]
+    fn init_drops_false_shell_blocks_before_conflict_validation() {
+        let mut fish = BlockConfigToml::default();
+        fish.when.push("shell:fish".into());
+        fish.alias.insert("vim".into(), "nvim".into());
+
+        let mut bash = BlockConfigToml::default();
+        bash.when.push("shell:bash".into());
+        bash.alias.insert("vim".into(), "hx".into());
+
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("fish_only".into(), fish), ("bash_only".into(), bash)]),
+        };
+
+        let resolution =
+            resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
+        assert_eq!(resolution.block_order, vec!["fish_only"]);
+        assert_eq!(resolution.alias_bindings.len(), 1);
+        assert_eq!(resolution.alias_bindings[0].key, "vim");
+        assert_eq!(resolution.alias_bindings[0].writers.len(), 1);
+        assert_eq!(
+            resolution.alias_bindings[0].writers[0].block_id,
+            "fish_only"
+        );
+    }
+
+    #[test]
+    fn folded_resolution_validates_predicates_even_when_block_has_no_actions() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("shell".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("broken".into(), block)]),
+        };
+
+        let err = resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap_err();
+        assert!(matches!(err, ConchError::PredicateParse(_)));
+        assert!(err
+            .to_string()
+            .contains("block `broken` has invalid `when` predicate"));
+    }
+
+    #[test]
+    fn folded_resolution_keeps_actionless_blocks_in_reports() {
+        let mut block = BlockConfigToml::default();
+        block.when.push("shell:fish".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("empty".into(), block)]),
+        };
+
+        let resolution =
+            resolve_init_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
+        assert!(resolution.ir.blocks.is_empty());
+        assert_eq!(resolution.block_order, vec!["empty"]);
+        assert_eq!(resolution.block_reports.len(), 1);
+        assert_eq!(resolution.block_reports[0].block_id, "empty");
+        assert_eq!(resolution.block_reports[0].action_count, 0);
+        assert!(!resolution.block_reports[0].guarded);
     }
 
     #[test]
@@ -496,7 +839,8 @@ mod tests {
             blocks: IndexMap::from([("kept".into(), kept), ("dropped".into(), dropped)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.block_order, vec!["kept"]);
         assert_eq!(resolution.block_reports.len(), 1);
         assert_eq!(resolution.block_reports[0].when, vec!["interactive"]);
@@ -520,7 +864,8 @@ mod tests {
             blocks: IndexMap::from([("kept".into(), kept)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.block_reports[0].source_line_count, 2);
     }
 
@@ -535,16 +880,15 @@ mod tests {
         let _home_guard = EnvVarGuard::replace("HOME", Some(temp_home.clone().into_os_string()));
 
         let mut block = BlockConfigToml::default();
-        block
-            .requires
-            .push("file:${env:HOME}/.config/nvim".into());
+        block.requires.push("file:${env:HOME}/.config/nvim".into());
         block.alias.insert("vim".into(), "nvim".into());
         let raw = RawConfig {
             init: Default::default(),
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
 
@@ -568,7 +912,8 @@ mod tests {
             blocks: IndexMap::from([("demo".into(), block)]),
         };
 
-        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        let resolution =
+            resolve_build_with_details(&raw, "fish", &HostFoldContext::default()).unwrap();
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert!(resolution.ir.blocks[0].requires.is_empty());
 

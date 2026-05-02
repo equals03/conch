@@ -149,12 +149,19 @@ fn render_atom(atom: &PredicateAtom) -> GuardPart {
         PredicateAtom::Dir(path) => GuardPart::Expr(format!("[[ -d {} ]]", shell_path(path))),
         PredicateAtom::Os(name) => GuardPart::Expr(format!(
             "[[ \"$(uname -s | tr '[:upper:]' '[:lower:]')\" == {} ]]",
-            bash_double_quote(name)
+            bash_double_quote(&runtime_os_name(name))
         )),
         PredicateAtom::Hostname(name) => GuardPart::Expr(format!(
             "[[ \"$(hostname)\" == {} ]]",
             bash_double_quote(name)
         )),
+    }
+}
+
+fn runtime_os_name(name: &str) -> String {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "macos" => "darwin".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -769,6 +776,29 @@ mod tests {
         let text = BashProvider.render(&ir);
         assert!(text.contains("if [[ -d \"$HOME/.config/nvim\" ]]; then"));
         assert!(text.contains("export NVIM_CONFIGURED=\"1\""));
+    }
+
+    #[test]
+    fn renders_macos_os_predicates_via_darwin_runtime_name() {
+        let ir = ResolvedIr {
+            blocks: vec![Block {
+                block_id: "mac".into(),
+                when: vec![Predicate {
+                    negated: false,
+                    atom: PredicateAtom::Os("macOS".into()),
+                }],
+                requires: vec![],
+                actions: vec![Action::SetEnv {
+                    key: "MAC_ONLY".into(),
+                    value: "1".into(),
+                }],
+            }],
+        };
+
+        let text = BashProvider.render(&ir);
+        assert!(text.contains("uname -s | tr '[:upper:]' '[:lower:]'"));
+        assert!(text.contains("== \"darwin\""));
+        assert!(!text.contains("== \"macOS\""));
     }
 
     #[test]

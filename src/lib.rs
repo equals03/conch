@@ -25,4 +25,5 @@ pub mod predicate;
 pub mod provider;
 pub mod resolve;
 
+pub use build::{detect_hostname, detect_os, HostFoldContext};
 pub use error::ConchError;
