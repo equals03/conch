@@ -345,10 +345,7 @@ mod tests {
         assert_eq!(resolution.ir.blocks.len(), 1);
         assert_eq!(resolution.ir.blocks[0].when.len(), 1);
         assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
-        assert_eq!(
-            resolution.ir.blocks[0].when[0].to_string(),
-            "interactive"
-        );
+        assert_eq!(resolution.ir.blocks[0].when[0].to_string(), "interactive");
         assert_eq!(
             resolution.ir.blocks[0].requires[0].to_string(),
             "env:EDITOR"
@@ -381,9 +378,7 @@ mod tests {
         let _home_guard = EnvVarGuard::replace("HOME", Some(OsString::new()));
 
         let mut block = BlockConfigToml::default();
-        block
-            .requires
-            .push("file:~/.conch-build-empty-home".into());
+        block.requires.push("file:~/.conch-build-empty-home".into());
         block.alias.insert("vim".into(), "nvim".into());
         let raw = RawConfig {
             init: Default::default(),
@@ -448,10 +443,7 @@ mod tests {
 
     #[test]
     fn build_folds_os_predicate_using_uname_kernel_name() {
-        let kernel = Command::new("uname")
-            .arg("-s")
-            .output()
-            .expect("uname -s");
+        let kernel = Command::new("uname").arg("-s").output().expect("uname -s");
         let stdout = String::from_utf8_lossy(&kernel.stdout);
         let kernel = stdout.trim();
         assert!(!kernel.is_empty(), "uname -s returned empty output");

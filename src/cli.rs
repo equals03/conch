@@ -345,17 +345,16 @@ fn env_conch_config_path() -> Option<PathBuf> {
 }
 
 fn resolve_default_config_path() -> Result<PathBuf, ConchError> {
+    let roots = xdg_config_roots()?;
     let mut candidates = Vec::new();
-    for root in xdg_config_roots()? {
-        candidates.extend(config_candidates_in_root(&root));
+    for root in &roots {
+        candidates.extend(config_candidates_in_root(root));
     }
     candidates
         .iter()
         .find(|path| path.is_file())
         .cloned()
-        .ok_or_else(|| {
-            ConchError::DefaultConfigNotFound(format_default_config_candidates(&candidates))
-        })
+        .ok_or_else(|| ConchError::DefaultConfigNotFound(format_default_config_hint(&roots)))
 }
 
 fn xdg_config_roots() -> Result<Vec<PathBuf>, ConchError> {
@@ -413,12 +412,34 @@ fn config_candidates_in_root(root: &Path) -> Vec<PathBuf> {
     candidates
 }
 
-fn format_default_config_candidates(candidates: &[PathBuf]) -> String {
-    candidates
+const DEFAULT_CONFIG_HINT_MAX_DIRS: usize = 8;
+
+/// Short user-facing hint: lists XDG roots, not every extension permutation (avoids huge errors on long `XDG_CONFIG_DIRS`).
+fn format_default_config_hint(roots: &[PathBuf]) -> String {
+    let dirs = format_dir_list_for_hint(roots);
+    format!(
+        "Searched for conch.{{toml,yaml,yml,json}} or conch/config.* under {dirs}. Pass --config or set {CONCH_CONFIG_ENV}."
+    )
+}
+
+fn format_dir_list_for_hint(roots: &[PathBuf]) -> String {
+    if roots.is_empty() {
+        return "(no config directories resolved)".to_string();
+    }
+    if roots.len() <= DEFAULT_CONFIG_HINT_MAX_DIRS {
+        return roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    let head: Vec<_> = roots
         .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
+        .take(DEFAULT_CONFIG_HINT_MAX_DIRS)
+        .map(|p| p.display().to_string())
+        .collect();
+    let n_more = roots.len() - DEFAULT_CONFIG_HINT_MAX_DIRS;
+    format!("{}, … (+{n_more} more)", head.join(", "))
 }
 
 fn load_config(path: &Path) -> Result<RawConfig, ConchError> {

@@ -118,21 +118,16 @@ fn missing_default_config_reports_xdg_search_paths() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("default config file not found"));
     assert!(
-        stderr.contains(&env.config_home.join("conch.toml").display().to_string()),
-        "stderr did not mention config-home flat path: {stderr:?}"
+        stderr.contains(&env.config_home.display().to_string()),
+        "stderr did not mention config-home dir: {stderr:?}"
     );
     assert!(
-        stderr.contains(
-            &env.config_home
-                .join("conch/config.toml")
-                .display()
-                .to_string()
-        ),
-        "stderr did not mention config-home nested path: {stderr:?}"
+        stderr.contains(&env.config_dirs.display().to_string()),
+        "stderr did not mention config-dirs root: {stderr:?}"
     );
     assert!(
-        stderr.contains(&env.config_dirs.join("conch.toml").display().to_string()),
-        "stderr did not mention config-dirs flat path: {stderr:?}"
+        stderr.contains("conch.{toml,yaml,yml,json}"),
+        "stderr should summarize filename patterns: {stderr:?}"
     );
 }
 

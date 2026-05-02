@@ -406,7 +406,7 @@ end
 
 | Message | What to do |
 | ------- | ---------- |
-| `default config file not found; searched XDG config locations: ...` | Create a config at one of the listed paths, or pass `--config` explicitly. Ensure `HOME` / `XDG_CONFIG_HOME` resolve as you expect. |
+| `default config file not found. Searched for conch.{toml,yaml,yml,json} or conch/config.* under …` | Create a config under an XDG directory, pass `--config`, or set `CONCH_CONFIG`. |
 | `merge conflict: ... does not order them` | Two blocks write the same env/alias key without a graph relationship. Add `before` / `after`. |
 | `invalid graph: cycle detected ...` | Remove or change a `before` / `after` edge. |
 | `invalid predicate: ...` | Fix predicate syntax; see [`docs/predicate-reference.md`](./docs/predicate-reference.md). |
