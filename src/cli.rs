@@ -27,7 +27,7 @@ pub struct Cli {
 pub enum Command {
     /// Parse config, validate schema, and report graph/conflict errors.
     Check {
-        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, uses `CONCH_CONFIG` when set, otherwise searches XDG config locations.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Target shell to validate. If omitted, conch validates both fish and bash.
@@ -42,7 +42,7 @@ pub enum Command {
     },
     /// Generate shell-native init output and print it to stdout.
     Init {
-        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, uses `CONCH_CONFIG` when set, otherwise searches XDG config locations.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Target shell to generate init output for.
@@ -57,7 +57,7 @@ pub enum Command {
     },
     /// Generate host-bound shell output with build-time folding of selected predicates.
     Build {
-        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, uses `CONCH_CONFIG` when set, otherwise searches XDG config locations.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Target shell to generate build output for.
@@ -72,7 +72,7 @@ pub enum Command {
     },
     /// Explain ordered blocks, guards, and write ordering for a target shell.
     Explain {
-        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, conch searches XDG config locations.
+        /// Path to config file (.toml, .yaml, .yml, or .json). If omitted, uses `CONCH_CONFIG` when set, otherwise searches XDG config locations.
         #[arg(long)]
         config: Option<PathBuf>,
         /// Target shell to explain.
@@ -145,6 +145,7 @@ impl ColorMode {
 const CONFIG_EXTENSIONS: [&str; 4] = ["toml", "yaml", "yml", "json"];
 const CONFIG_SEARCH_STEMS: [&str; 2] = ["conch", "conch/config"];
 const XDG_DEFAULT_CONFIG_DIRS: &str = "/etc/xdg";
+const CONCH_CONFIG_ENV: &str = "CONCH_CONFIG";
 
 #[derive(Copy, Clone, Debug)]
 enum ConfigFormat {
@@ -323,12 +324,24 @@ fn print_check_explain(
     Ok(())
 }
 
-fn load_selected_config(path: Option<PathBuf>) -> Result<RawConfig, ConchError> {
-    let path = match path {
+fn load_selected_config(cli_config: Option<PathBuf>) -> Result<RawConfig, ConchError> {
+    let path = match cli_config {
         Some(path) => path,
-        None => resolve_default_config_path()?,
+        None => match env_conch_config_path() {
+            Some(path) => path,
+            None => resolve_default_config_path()?,
+        },
     };
     load_config(&path)
+}
+
+/// Config path from `CONCH_CONFIG` when set and non-empty; otherwise `None` so callers can fall back to XDG.
+fn env_conch_config_path() -> Option<PathBuf> {
+    let path = env::var_os(CONCH_CONFIG_ENV)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(path))
 }
 
 fn resolve_default_config_path() -> Result<PathBuf, ConchError> {
@@ -353,18 +366,15 @@ fn xdg_config_roots() -> Result<Vec<PathBuf>, ConchError> {
 
 fn xdg_config_home() -> Result<PathBuf, ConchError> {
     if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
-        if path.is_empty() {
-            return Err(ConchError::Validation(
-                "XDG_CONFIG_HOME must not be empty when set".into(),
-            ));
+        if !path.is_empty() {
+            let path = PathBuf::from(path);
+            if !path.is_absolute() {
+                return Err(ConchError::Validation(
+                    "XDG_CONFIG_HOME must be an absolute path".into(),
+                ));
+            }
+            return Ok(path);
         }
-        let path = PathBuf::from(path);
-        if !path.is_absolute() {
-            return Err(ConchError::Validation(
-                "XDG_CONFIG_HOME must be an absolute path".into(),
-            ));
-        }
-        return Ok(path);
     }
 
     match env::var_os("HOME") {

@@ -47,6 +47,19 @@ impl XdgTestEnv {
             .env("HOME", sandbox_home(&self.root))
             .env("XDG_CONFIG_HOME", &self.config_home)
             .env("XDG_CONFIG_DIRS", &self.config_dirs)
+            .env_remove("CONCH_CONFIG")
+            .output()
+            .expect("failed to run conch binary")
+    }
+
+    fn run_with_conch_config(&self, args: &[&str], conch_config: &Path) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_conch"))
+            .args(args)
+            .current_dir(&self.root)
+            .env("HOME", sandbox_home(&self.root))
+            .env("XDG_CONFIG_HOME", &self.config_home)
+            .env("XDG_CONFIG_DIRS", &self.config_dirs)
+            .env("CONCH_CONFIG", conch_config)
             .output()
             .expect("failed to run conch binary")
     }
@@ -121,4 +134,49 @@ fn missing_default_config_reports_xdg_search_paths() {
         stderr.contains(&env.config_dirs.join("conch.toml").display().to_string()),
         "stderr did not mention config-dirs flat path: {stderr:?}"
     );
+}
+
+#[test]
+fn check_uses_conch_config_env() {
+    let env = XdgTestEnv::new("conch-config-env");
+    let custom = env.root.join("elsewhere/conch.toml");
+    write_file(&custom, VALID_CONFIG);
+    let output = env.run_with_conch_config(&["check"], &custom);
+    assert!(output.status.success(), "check failed: {:?}", output);
+}
+
+#[test]
+fn cli_config_overrides_conch_config() {
+    let env = XdgTestEnv::new("cli-overrides-conch-config");
+    let bad = env.root.join("bad.toml");
+    write_file(&bad, "not toml {{{");
+    let good =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/configs/simple-single.toml");
+    let output = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(["check", "--config"])
+        .arg(&good)
+        .current_dir(&env.root)
+        .env("HOME", sandbox_home(&env.root))
+        .env("XDG_CONFIG_HOME", &env.config_home)
+        .env("XDG_CONFIG_DIRS", &env.config_dirs)
+        .env("CONCH_CONFIG", &bad)
+        .output()
+        .expect("failed to run conch binary");
+    assert!(output.status.success(), "check failed: {:?}", output);
+}
+
+#[test]
+fn empty_conch_config_env_falls_back_to_xdg() {
+    let env = XdgTestEnv::new("empty-conch-config");
+    write_file(&env.config_home.join("conch.toml"), VALID_CONFIG);
+    let output = Command::new(env!("CARGO_BIN_EXE_conch"))
+        .args(["check"])
+        .current_dir(&env.root)
+        .env("HOME", sandbox_home(&env.root))
+        .env("XDG_CONFIG_HOME", &env.config_home)
+        .env("XDG_CONFIG_DIRS", &env.config_dirs)
+        .env("CONCH_CONFIG", "")
+        .output()
+        .expect("failed to run conch binary");
+    assert!(output.status.success(), "check failed: {:?}", output);
 }
