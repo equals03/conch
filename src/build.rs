@@ -21,7 +21,7 @@ use crate::error::ConchError;
 use crate::graph::build_graph;
 use crate::ir::{Action, Block, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
-use crate::provider::subst::{parse_interpolated_value, InterpSegment};
+use crate::provider::subst::{parse_predicate_path_interp, InterpSegment};
 use crate::resolve::{
     actions_for_block, parse_predicates_for, BindingReport, BindingValue, BindingWrite,
     BlockReport, PathContribution, Resolution,
@@ -437,7 +437,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn expanded_path(value: &str) -> Option<PathBuf> {
-    let segments = parse_interpolated_value(value).ok()?;
+    let segments = parse_predicate_path_interp(value).ok()?;
     let home = if segments
         .iter()
         .any(|segment| matches!(segment, InterpSegment::Home))

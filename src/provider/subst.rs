@@ -1,6 +1,10 @@
 //! `${env:NAME}` substitution and leading `~` / `~/` (current-user home) in interpolated strings.
 //!
 //! Values are validated at config load; providers assume parse success when rendering.
+//!
+//! Shell-facing interpolation supports `\` escapes (see [`parse_interpolated_value`]). Paths used
+//! in build-time [`crate::build`] `file:` / `dir:` folding use [`parse_predicate_path_interp`]
+//! instead so native Windows separators are not swallowed.
 
 use crate::env_name::validate_env_var_name;
 use crate::error::ConchError;
@@ -36,6 +40,63 @@ pub(crate) fn parse_interpolated_value(input: &str) -> Result<Vec<InterpSegment>
 
     parse_tail(input, input, &mut segments)?;
     Ok(segments)
+}
+
+/// Like [`parse_interpolated_value`], but backslashes are kept for normal path characters (Windows).
+/// The only special case is `\$` → a literal `$`, so values like `\${env:HOME}` remain a literal for
+/// config authors without breaking `C:\Users\...\file`.
+pub(crate) fn parse_predicate_path_interp(input: &str) -> Result<Vec<InterpSegment>, ConchError> {
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut segments = Vec::new();
+    if input == "~" {
+        segments.push(InterpSegment::Home);
+        return Ok(segments);
+    }
+
+    if let Some(rest) = input.strip_prefix("~/") {
+        segments.push(InterpSegment::Home);
+        if rest.is_empty() {
+            return Ok(segments);
+        }
+        let tail = format!("/{rest}");
+        parse_tail_predicate_path(&tail, input, &mut segments)?;
+        return Ok(segments);
+    }
+
+    parse_tail_predicate_path(input, input, &mut segments)?;
+    Ok(segments)
+}
+
+fn parse_tail_predicate_path(
+    tail: &str,
+    full_input: &str,
+    segments: &mut Vec<InterpSegment>,
+) -> Result<(), ConchError> {
+    let mut lit = String::new();
+    let mut iter = tail.char_indices().peekable();
+
+    while let Some((_, c)) = iter.next() {
+        if c == '\\' && iter.peek().is_some_and(|&(_, ch)| ch == '$') {
+            iter.next(); // consume '$'
+            lit.push('$');
+            continue;
+        }
+
+        if c == '$' && iter.peek().is_some_and(|&(_, ch)| ch == '{') {
+            iter.next(); // consume '{'
+            flush_lit(segments, &mut lit);
+            parse_env_brace(&mut iter, full_input, segments)?;
+            continue;
+        }
+
+        lit.push(c);
+    }
+
+    flush_lit(segments, &mut lit);
+    Ok(())
 }
 
 fn parse_tail(
@@ -272,6 +333,22 @@ mod tests {
         assert_eq!(
             parse_interpolated_value(r"\${env:HOME}").unwrap(),
             vec![InterpSegment::Lit("${env:HOME}".into())]
+        );
+    }
+
+    #[test]
+    fn predicate_path_preserves_windows_separators() {
+        assert_eq!(
+            parse_predicate_path_interp(r"C:\tmp\predicates\x\cfg").unwrap(),
+            vec![InterpSegment::Lit(r"C:\tmp\predicates\x\cfg".into())]
+        );
+    }
+
+    #[test]
+    fn predicate_path_dollar_brace_escape_matches_shell_interp() {
+        assert_eq!(
+            parse_predicate_path_interp(r"\${env:HOME}").unwrap(),
+            parse_interpolated_value(r"\${env:HOME}").unwrap(),
         );
     }
 }
