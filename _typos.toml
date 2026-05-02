@@ -1,0 +1,5 @@
+# Intentional misspellings in tests for unknown-key errors.
+[default.extend-words]
+preprend = "preprend"
+soruce_lines = "soruce_lines"
+soruce = "soruce"
