@@ -132,7 +132,11 @@ fn build_blocks_and_reports(
             guarded: !(block_cfg.when.is_empty() && block_cfg.requires.is_empty()),
             action_count: actions.len(),
             source_count: effective.source.len(),
-            source_line_count: effective.source_lines.len(),
+            source_line_count: effective
+                .source_lines
+                .iter()
+                .map(|line| crate::provider::verbatim_line_count(line))
+                .sum(),
         });
 
         validate_writers(
@@ -636,5 +640,30 @@ mod tests {
         assert_eq!(report.source_count, 2);
         assert_eq!(report.source_line_count, 1);
         assert_eq!(report.action_count, 3);
+    }
+
+    #[test]
+    fn counts_multiline_source_lines_in_reports() {
+        let mut starship = sample_block();
+        starship.shell.insert(
+            "fish".into(),
+            ShellOverridesToml {
+                source_lines: vec!["echo a\necho b\n".into()],
+                ..Default::default()
+            },
+        );
+
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("starship".into(), starship)]),
+        };
+
+        let resolution = resolve_with_details(&raw, "fish").unwrap();
+        let report = resolution
+            .block_reports
+            .iter()
+            .find(|r| r.block_id == "starship")
+            .unwrap();
+        assert_eq!(report.source_line_count, 2);
     }
 }

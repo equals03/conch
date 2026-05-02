@@ -76,6 +76,13 @@ Declares that this app should be emitted after the listed apps.
 
 Environment exports. Values may be strings, booleans, or integers. Providers decide how to render each scalar for the target shell.
 
+String values support:
+
+- **`${env:VAR}`** — same naming rules as `env:` predicates (see `docs/predicate-reference.md`): ASCII letter or underscore, then letters, digits, underscores. Expanded when the generated script is sourced (bash: `${VAR}`; fish: `$VAR` inside double quotes). Use a backslash to get a literal dollar-brace fragment, e.g. `\${env:HOME}` stays verbatim in the value.
+- **Leading `~` / `~/…`** — conch means the current user’s home (rendered as `$HOME` in bash and fish v1). Mid-string `~` is not treated as home.
+
+`{ raw = "…" }` still emits the right-hand side exactly; use it for command substitution or shell syntax that `${env:…}` does not cover.
+
 ### `[blocks.<id>.alias]`
 
 String key/value alias definitions.
@@ -91,6 +98,8 @@ Supported keys:
 - `move_front = [..]`
 - `move_back = [..]`
 
+Path strings use the same `~` / `~/…` and `${env:VAR}` interpolation rules as `[blocks.<id>.env]` string values.
+
 ### `source = [..]`
 
 Structured source actions. Supported both directly under `[blocks.<id>]` and under `[blocks.<id>.shell.<name>]`.
@@ -101,7 +110,9 @@ Each entry must be one of:
 - `{ file = "..." }`
 - `{ command = ["arg0", "arg1", ...] }`
 
-Command entries are shell-neutral data, not shell code strings. Providers render them as shell-native command-output sourcing:
+File paths use the same `~` / `~/…` and `${env:VAR}` rules as `[blocks.<id>.env]` string values.
+
+Command entries are shell-neutral data, not shell code strings. Each argument uses the same `~` / `${env:VAR}` interpolation rules as file paths. Providers render them as shell-native command-output sourcing:
 
 - Fish: `<command> | source`
 - Bash: `eval "$(<command>)"`

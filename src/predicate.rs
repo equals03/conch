@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use crate::env_name::validate_env_var_name;
 use crate::error::ConchError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,8 +135,26 @@ fn parse_atom(body: &str, original: &str) -> Result<PredicateAtom, ConchError> {
                 Ok(PredicateAtom::EnvExists(name.to_string()))
             }
         }
-        "file" => Ok(PredicateAtom::File(value.to_string())),
-        "dir" => Ok(PredicateAtom::Dir(value.to_string())),
+        "file" => {
+            crate::provider::subst::parse_interpolated_value(value).map_err(|err| {
+                let detail = err.to_string();
+                let detail = detail
+                    .strip_prefix("invalid configuration: ")
+                    .unwrap_or(&detail);
+                predicate_error(original, detail)
+            })?;
+            Ok(PredicateAtom::File(value.to_string()))
+        }
+        "dir" => {
+            crate::provider::subst::parse_interpolated_value(value).map_err(|err| {
+                let detail = err.to_string();
+                let detail = detail
+                    .strip_prefix("invalid configuration: ")
+                    .unwrap_or(&detail);
+                predicate_error(original, detail)
+            })?;
+            Ok(PredicateAtom::Dir(value.to_string()))
+        }
         "os" => Ok(PredicateAtom::Os(value.to_string())),
         "hostname" => Ok(PredicateAtom::Hostname(value.to_string())),
         _ => Err(predicate_error(
@@ -145,29 +164,6 @@ fn parse_atom(body: &str, original: &str) -> Result<PredicateAtom, ConchError> {
             ),
         )),
     }
-}
-
-fn validate_env_var_name(name: &str, original: &str) -> Result<(), ConchError> {
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return Err(predicate_error(
-            original,
-            "`env:` predicates must include a variable name, for example `env:EDITOR`",
-        ));
-    };
-    if !(first.is_ascii_alphabetic() || first == '_') {
-        return Err(predicate_error(
-            original,
-            "`env:` variable names must start with an ASCII letter or underscore",
-        ));
-    }
-    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Err(predicate_error(
-            original,
-            "`env:` variable names may contain only ASCII letters, digits, and underscores",
-        ));
-    }
-    Ok(())
 }
 
 fn predicate_error(input: &str, reason: &str) -> ConchError {
@@ -280,7 +276,11 @@ mod tests {
         for case in cases {
             let err = Predicate::parse(case).unwrap_err();
             let rendered = err.to_string();
-            assert!(rendered.contains("invalid predicate"));
+            assert!(
+                rendered.contains("invalid configuration")
+                    || rendered.contains("invalid predicate"),
+                "{rendered}"
+            );
             assert!(rendered.contains(&format!("`{case}`")));
         }
     }

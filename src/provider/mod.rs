@@ -4,6 +4,7 @@
 
 mod bash;
 mod fish;
+pub(crate) mod subst;
 
 pub use bash::BashProvider;
 pub use fish::FishProvider;
@@ -13,16 +14,6 @@ use crate::predicate::{Predicate, PredicateAtom};
 
 pub trait ShellProvider {
     fn render(&self, ir: &ResolvedIr) -> String;
-}
-
-fn normalise_home(value: &str) -> String {
-    if value == "~" {
-        "$HOME".into()
-    } else if let Some(rest) = value.strip_prefix("~/") {
-        format!("$HOME/{}", rest)
-    } else {
-        value.to_string()
-    }
 }
 
 pub(crate) struct HoistedBlock<'a> {
@@ -120,16 +111,26 @@ pub(crate) fn source_command_for_shell(command: &[String], shell: &str) -> Vec<S
         .collect()
 }
 
-/// Emit `text` with `prefix` at the start and after every `\n`; append `\n` if `text` has no trailing newline.
+/// Count physical lines emitted by [`push_indented_verbatim`].
+pub(crate) fn verbatim_line_count(text: &str) -> usize {
+    if text.is_empty() {
+        1
+    } else {
+        text.split_inclusive('\n').count()
+    }
+}
+
+/// Emit `text` with `prefix` at the start of each physical line.
 pub(crate) fn push_indented_verbatim(out: &mut String, text: &str, prefix: &str) {
-    out.push_str(prefix);
-    for ch in text.chars() {
-        if ch == '\n' {
-            out.push('\n');
-            out.push_str(prefix);
-        } else {
-            out.push(ch);
-        }
+    if text.is_empty() {
+        out.push_str(prefix);
+        out.push('\n');
+        return;
+    }
+
+    for chunk in text.split_inclusive('\n') {
+        out.push_str(prefix);
+        out.push_str(chunk);
     }
     if !text.ends_with('\n') {
         out.push('\n');
@@ -270,5 +271,21 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].blocks.len(), 2);
         assert_eq!(canonical_hoistable_key(&runs[0].hoistable), vec![(0, true)]);
+    }
+
+    #[test]
+    fn counts_verbatim_lines_including_trailing_newlines() {
+        assert_eq!(verbatim_line_count(""), 1);
+        assert_eq!(verbatim_line_count("echo a"), 1);
+        assert_eq!(verbatim_line_count("echo a\necho b"), 2);
+        assert_eq!(verbatim_line_count("echo a\necho b\n"), 2);
+    }
+
+    #[test]
+    fn indents_multiline_verbatim_text_without_double_prefixing() {
+        let mut out = String::new();
+        push_indented_verbatim(&mut out, "echo a\necho b\n", "    ");
+
+        assert_eq!(out, "    echo a\n    echo b\n");
     }
 }

@@ -14,6 +14,7 @@ use crate::config::RawConfig;
 use crate::error::ConchError;
 use crate::ir::{Action, Block, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
+use crate::provider::subst::{parse_interpolated_value, InterpSegment};
 use crate::resolve::{
     resolve_with_details, BindingReport, BindingValue, BindingWrite, BlockReport, PathContribution,
     Resolution,
@@ -129,7 +130,12 @@ fn rebuild_resolution(target_shell: &str, blocks: Vec<Block>) -> Resolution {
                     op: op.clone(),
                 }),
                 Action::Source(_) => source_count += 1,
-                Action::SourceLines { lines } => source_line_count += lines.len(),
+                Action::SourceLines { lines } => {
+                    source_line_count += lines
+                        .iter()
+                        .map(|line| crate::provider::verbatim_line_count(line))
+                        .sum::<usize>();
+                }
             }
         }
 
@@ -223,13 +229,23 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn expanded_path(value: &str) -> Option<PathBuf> {
-    if value == "~" {
-        return home_dir();
+    let segments = parse_interpolated_value(value).ok()?;
+    let home = if segments.iter().any(|segment| matches!(segment, InterpSegment::Home)) {
+        Some(home_dir()?.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
+    let mut rendered = String::new();
+    for segment in segments {
+        match segment {
+            InterpSegment::Lit(text) => rendered.push_str(&text),
+            InterpSegment::Home => rendered.push_str(home.as_ref().expect("home checked above")),
+            InterpSegment::Env(_) => return None,
+        }
     }
-    if let Some(rest) = value.strip_prefix("~/") {
-        return Some(home_dir()?.join(rest));
-    }
-    Some(PathBuf::from(value))
+
+    Some(PathBuf::from(rendered))
 }
 
 fn host_name() -> Option<String> {
@@ -269,7 +285,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        BlockConfigToml, EnvValue, RawConfig, SourceEntryFieldsToml, SourceEntryToml,
+        BlockConfigToml, EnvValue, RawConfig, ShellOverridesToml, SourceEntryFieldsToml,
+        SourceEntryToml,
     };
 
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
@@ -485,5 +502,76 @@ mod tests {
         assert_eq!(resolution.block_reports[0].when, vec!["interactive"]);
         assert_eq!(resolution.env_bindings.len(), 1);
         assert!(resolution.alias_bindings.is_empty());
+    }
+
+    #[test]
+    fn build_counts_multiline_source_lines_in_reports() {
+        let mut kept = BlockConfigToml::default();
+        kept.shell.insert(
+            "fish".into(),
+            ShellOverridesToml {
+                source_lines: vec!["echo a\necho b\n".into()],
+                ..Default::default()
+            },
+        );
+
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("kept".into(), kept)]),
+        };
+
+        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        assert_eq!(resolution.block_reports[0].source_line_count, 2);
+    }
+
+    #[test]
+    fn build_keeps_file_predicates_with_env_interpolation() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let temp_home = temp_path("home");
+        let config_dir = temp_home.join(".config");
+        let file = config_dir.join("nvim");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(&file, "set number").unwrap();
+        let _home_guard = EnvVarGuard::replace("HOME", Some(temp_home.clone().into_os_string()));
+
+        let mut block = BlockConfigToml::default();
+        block
+            .requires
+            .push("file:${env:HOME}/.config/nvim".into());
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+
+        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        assert_eq!(resolution.ir.blocks.len(), 1);
+        assert_eq!(resolution.ir.blocks[0].requires.len(), 1);
+
+        let _ = fs::remove_dir_all(&temp_home);
+    }
+
+    #[test]
+    fn build_still_folds_absolute_file_predicates_without_home() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let temp_root = temp_path("abs");
+        let file = temp_root.join("demo.conf");
+        fs::create_dir_all(&temp_root).unwrap();
+        fs::write(&file, "demo").unwrap();
+        let _home_guard = EnvVarGuard::unset("HOME");
+
+        let mut block = BlockConfigToml::default();
+        block.requires.push(format!("file:{}", file.display()));
+        block.alias.insert("vim".into(), "nvim".into());
+        let raw = RawConfig {
+            init: Default::default(),
+            blocks: IndexMap::from([("demo".into(), block)]),
+        };
+
+        let resolution = resolve_build_with_details(&raw, "fish").unwrap();
+        assert_eq!(resolution.ir.blocks.len(), 1);
+        assert!(resolution.ir.blocks[0].requires.is_empty());
+
+        let _ = fs::remove_dir_all(&temp_root);
     }
 }

@@ -9,8 +9,8 @@ use crate::config::{EnvValue, SourceEntry};
 use crate::ir::{Action, PathOp, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
 use crate::provider::{
-    build_hoist_runs, push_indented_verbatim, source_command_for_shell, HoistRun, HoistedBlock,
-    ShellProvider,
+    build_hoist_runs, push_indented_verbatim, source_command_for_shell, subst, HoistRun,
+    HoistedBlock, ShellProvider,
 };
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -218,17 +218,25 @@ fn render_source_command(command: &[String]) -> String {
 }
 
 fn bash_command_arg(value: &str) -> String {
-    if value == "~" || value.starts_with("~/") {
-        bash_path_quote(&super::normalise_home(value))
-    } else {
-        bash_single_quote(value)
+    let segs = subst::parse_interpolated_value(value)
+        .expect("interpolated command arguments must have been validated when loading config");
+    if segs.len() == 1 {
+        if let subst::InterpSegment::Lit(s) = &segs[0] {
+            return bash_single_quote(s);
+        }
     }
+    subst::bash_render_interpolated(&segs)
 }
 
 fn bash_env_value(value: &EnvValue) -> String {
     match value {
         EnvValue::Raw(raw) => raw.clone(),
-        _ => bash_double_quote(&value.as_string()),
+        _ => {
+            let s = value.as_string();
+            let segs = subst::parse_interpolated_value(&s)
+                .expect("interpolated env values must have been validated when loading config");
+            subst::bash_render_interpolated(&segs)
+        }
     }
 }
 
@@ -249,19 +257,9 @@ fn bash_double_quote(value: &str) -> String {
 }
 
 fn shell_path(value: &str) -> String {
-    let normalised = super::normalise_home(value);
-    bash_path_quote(&normalised)
-}
-
-fn bash_path_quote(value: &str) -> String {
-    format!(
-        "\"{}\"",
-        value
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('`', "\\`")
-            .replace('!', "\\!")
-    )
+    let segs = subst::parse_interpolated_value(value)
+        .expect("interpolated paths must have been validated when loading config");
+    subst::bash_render_path_interpolated(&segs)
 }
 
 #[cfg(test)]
@@ -395,6 +393,31 @@ mod tests {
 
         let text = BashProvider.render(&ir);
         assert!(text.contains("export PROMPT=\"\\$HOME\""));
+    }
+
+    #[test]
+    fn interpolates_env_dollar_brace_and_tilde_in_string_env() {
+        let ir = ResolvedIr {
+            blocks: vec![Block {
+                block_id: "demo".into(),
+                when: vec![],
+                requires: vec![],
+                actions: vec![
+                    Action::SetEnv {
+                        key: "XDG_BIN_HOME".into(),
+                        value: "${env:HOME}/.local/bin".into(),
+                    },
+                    Action::SetEnv {
+                        key: "LOCAL".into(),
+                        value: "~/.local".into(),
+                    },
+                ],
+            }],
+        };
+
+        let text = BashProvider.render(&ir);
+        assert!(text.contains("export XDG_BIN_HOME=\"${HOME}/.local/bin\""));
+        assert!(text.contains("export LOCAL=\"$HOME/.local\""));
     }
 
     #[test]

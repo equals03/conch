@@ -9,8 +9,8 @@ use crate::config::{EnvValue, SourceEntry};
 use crate::ir::{Action, PathOp, ResolvedIr};
 use crate::predicate::{Predicate, PredicateAtom};
 use crate::provider::{
-    build_hoist_runs, push_indented_verbatim, source_command_for_shell, HoistRun, HoistedBlock,
-    ShellProvider,
+    build_hoist_runs, push_indented_verbatim, source_command_for_shell, subst, HoistRun,
+    HoistedBlock, ShellProvider,
 };
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -219,16 +219,23 @@ fn render_source_command(command: &[String]) -> String {
 }
 
 fn fish_command_arg(value: &str) -> String {
-    if value == "~" || value.starts_with("~/") {
-        fish_path(&super::normalise_home(value))
-    } else {
-        fish_string(value)
+    let segs = subst::parse_interpolated_value(value)
+        .expect("interpolated command arguments must have been validated when loading config");
+    if segs.len() == 1 {
+        if let subst::InterpSegment::Lit(s) = &segs[0] {
+            return fish_string(s);
+        }
     }
+    subst::fish_render_interpolated(&segs)
 }
 
 fn fish_env_value(value: &EnvValue) -> String {
     match value {
-        EnvValue::String(value) => fish_string(value),
+        EnvValue::String(value) => {
+            let segs = subst::parse_interpolated_value(value)
+                .expect("interpolated env values must have been validated when loading config");
+            subst::fish_render_interpolated(&segs)
+        }
         EnvValue::Bool(value) => value.to_string(),
         EnvValue::Integer(value) => value.clone(),
         EnvValue::Raw(value) => value.clone(),
@@ -245,18 +252,10 @@ fn fish_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn fish_path(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('(', "\\(")
-        .replace(')', "\\)");
-    format!("\"{escaped}\"")
-}
-
 fn shell_path(value: &str) -> String {
-    let normalised = super::normalise_home(value);
-    fish_path(&normalised)
+    let segs = subst::parse_interpolated_value(value)
+        .expect("interpolated paths must have been validated when loading config");
+    subst::fish_render_path_interpolated(&segs)
 }
 
 #[cfg(test)]
@@ -460,6 +459,31 @@ mod tests {
         assert!(text.contains("set -gx RETRIES 1;"));
         assert!(text.contains("set -gx EDITOR \"nvim\";"));
         assert!(text.contains("set -gx LEAN_CTX_BIN (command -v lean-ctx);"));
+    }
+
+    #[test]
+    fn interpolates_env_dollar_brace_and_tilde_in_string_env() {
+        let ir = ResolvedIr {
+            blocks: vec![Block {
+                block_id: "demo".into(),
+                when: vec![],
+                requires: vec![],
+                actions: vec![
+                    Action::SetEnv {
+                        key: "XDG_BIN_HOME".into(),
+                        value: "${env:HOME}/.local/bin".into(),
+                    },
+                    Action::SetEnv {
+                        key: "LOCAL".into(),
+                        value: "~/.local".into(),
+                    },
+                ],
+            }],
+        };
+
+        let text = FishProvider.render(&ir);
+        assert!(text.contains("set -gx XDG_BIN_HOME \"$HOME/.local/bin\";"));
+        assert!(text.contains("set -gx LOCAL \"$HOME/.local\";"));
     }
 
     #[test]

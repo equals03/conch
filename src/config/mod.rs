@@ -263,6 +263,7 @@ impl TryFrom<&RawConfig> for Config {
             blocks,
         };
         validate_init_guard_reserved_env_keys(&config)?;
+        validate_interpolated_strings(&config)?;
         Ok(config)
     }
 }
@@ -384,6 +385,21 @@ fn validate_source_command(
     Ok(SourceEntry::Command(command))
 }
 
+fn validate_source_command_interpolation(
+    command: &[String],
+    scope: &str,
+) -> Result<(), ConchError> {
+    use crate::provider::subst::parse_interpolated_value;
+
+    for (index, arg) in command.iter().enumerate() {
+        parse_interpolated_value(arg).map_err(|e| {
+            ConchError::Validation(format!("{scope} command arg #{}: {e}", index + 1))
+        })?;
+    }
+
+    Ok(())
+}
+
 fn validate_init_guard_reserved_env_keys(config: &Config) -> Result<(), ConchError> {
     if !config.init.guard.enabled {
         return Ok(());
@@ -413,6 +429,97 @@ fn validate_reserved_env_scope(
             return Err(ConchError::Validation(format!(
                 "{scope} cannot set reserved env key `{key}` when `[init.guard] enabled = true`; conch emits that variable automatically"
             )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_interpolated_strings(config: &Config) -> Result<(), ConchError> {
+    use crate::provider::subst::parse_interpolated_value;
+
+    for (block_id, block) in &config.blocks {
+        for (k, v) in &block.env {
+            if let EnvValue::String(s) = v {
+                parse_interpolated_value(s).map_err(|e| {
+                    ConchError::Validation(format!("block `{block_id}` env key `{k}`: {e}"))
+                })?;
+            }
+        }
+
+        for (label, list) in [
+            ("prepend", &block.path.prepend),
+            ("append", &block.path.append),
+            ("move_front", &block.path.move_front),
+            ("move_back", &block.path.move_back),
+        ] {
+            for p in list {
+                parse_interpolated_value(p).map_err(|e| {
+                    ConchError::Validation(format!(
+                        "block `{block_id}` path `{label}` entry `{p}`: {e}"
+                    ))
+                })?;
+            }
+        }
+
+        for (index, entry) in block.source.iter().enumerate() {
+            match entry {
+                SourceEntry::File(p) => {
+                    parse_interpolated_value(p).map_err(|e| {
+                        ConchError::Validation(format!("block `{block_id}` source file `{p}`: {e}"))
+                    })?;
+                }
+                SourceEntry::Command(command) => validate_source_command_interpolation(
+                    command,
+                    &format!("block `{block_id}` source entry #{}", index + 1),
+                )?,
+            }
+        }
+
+        for (shell_name, ov) in &block.shell {
+            for (k, v) in &ov.env {
+                if let EnvValue::String(s) = v {
+                    parse_interpolated_value(s).map_err(|e| {
+                        ConchError::Validation(format!(
+                            "block `{block_id}` shell `{shell_name}` env key `{k}`: {e}"
+                        ))
+                    })?;
+                }
+            }
+
+            for (label, list) in [
+                ("prepend", &ov.path.prepend),
+                ("append", &ov.path.append),
+                ("move_front", &ov.path.move_front),
+                ("move_back", &ov.path.move_back),
+            ] {
+                for p in list {
+                    parse_interpolated_value(p).map_err(|e| {
+                        ConchError::Validation(format!(
+                            "block `{block_id}` shell `{shell_name}` path `{label}` entry `{p}`: {e}"
+                        ))
+                    })?;
+                }
+            }
+
+            for (index, entry) in ov.source.iter().enumerate() {
+                match entry {
+                    SourceEntry::File(p) => {
+                        parse_interpolated_value(p).map_err(|e| {
+                            ConchError::Validation(format!(
+                                "block `{block_id}` shell `{shell_name}` source file `{p}`: {e}"
+                            ))
+                        })?;
+                    }
+                    SourceEntry::Command(command) => validate_source_command_interpolation(
+                        command,
+                        &format!(
+                            "block `{block_id}` shell `{shell_name}` source entry #{}",
+                            index + 1
+                        ),
+                    )?,
+                }
+            }
         }
     }
 
@@ -456,6 +563,22 @@ impl From<PathSpecToml> for PathSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_interpolation_in_env_strings() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.a]
+            [blocks.a.env]
+            BAD = "${foo:bar}"
+            "#,
+        )
+        .unwrap();
+        let err = Config::try_from(&raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("block `a` env key `BAD`"), "{msg}");
+        assert!(msg.contains("only `${env:VAR}`"), "{msg}");
+    }
 
     #[test]
     fn converts_raw_to_typed_config() {
@@ -521,6 +644,22 @@ mod tests {
             vec![SourceEntry::File("~/.config/fish/local.fish".into())]
         );
         assert_eq!(baile.shell["fish"].source_lines, vec!["echo sourced"]);
+    }
+
+    #[test]
+    fn rejects_invalid_interpolation_in_source_commands() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [blocks.demo]
+            source = [{ command = ["echo", "${foo:bar}"] }]
+            "#,
+        )
+        .unwrap();
+
+        let err = Config::try_from(&raw).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("block `demo` source entry #1 command arg #2"), "{msg}");
+        assert!(msg.contains("only `${env:VAR}`"), "{msg}");
     }
 
     #[test]
