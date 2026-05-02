@@ -1,6 +1,12 @@
 use std::fs;
 use std::process::Command;
 
+/// Canonicalize newlines so golden files checked out as CRLF on Windows still match
+/// generator output (`\n` only).
+fn normalize_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 fn run_init(shell: &str, config: &str) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_conch"))
         .args(["init", shell, "--config", config])
@@ -15,26 +21,26 @@ fn run_init(shell: &str, config: &str) -> String {
 fn fish_output_matches_golden() {
     let actual = run_init("fish", "tests/fixtures/golden/basic.toml");
     let expected = fs::read_to_string("tests/fixtures/golden/basic.fish").unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(normalize_newlines(&actual), normalize_newlines(&expected));
 }
 
 #[test]
 fn bash_output_matches_golden() {
     let actual = run_init("bash", "tests/fixtures/golden/basic.toml");
     let expected = fs::read_to_string("tests/fixtures/golden/basic.bash").unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(normalize_newlines(&actual), normalize_newlines(&expected));
 }
 
 #[test]
 fn guarded_fish_output_matches_golden() {
     let actual = run_init("fish", "tests/fixtures/golden/guarded.toml");
     let expected = fs::read_to_string("tests/fixtures/golden/guarded.fish").unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(normalize_newlines(&actual), normalize_newlines(&expected));
 }
 
 #[test]
 fn guarded_bash_output_matches_golden() {
     let actual = run_init("bash", "tests/fixtures/golden/guarded.toml");
     let expected = fs::read_to_string("tests/fixtures/golden/guarded.bash").unwrap();
-    assert_eq!(actual, expected);
+    assert_eq!(normalize_newlines(&actual), normalize_newlines(&expected));
 }
